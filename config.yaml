@@ -1,0 +1,89 @@
+# Media Agent — Runtime Configuration
+
+# --- Cadence ---
+clips_per_day: 4
+days_per_run: 7
+upload_slots: ["09:00", "13:00", "17:00", "21:00"]   # canonical timezone (below)
+
+# --- Time ---
+timezone: "Asia/Singapore"
+
+# --- Discovery ---
+keywords:
+  - "Joe Rogan"
+  - "stoicism"
+  - "NBA highlights"
+search_max_results_per_keyword: 30
+min_source_duration_seconds: 300                      # 5 minutes
+recency_window_days: 30
+virality_score_threshold: 1.0
+
+# --- Models ---
+whisper_model: "large-v3"                             # falls back to medium.en if VRAM tight
+whisper_compute_type: "int8_float16"                  # CTranslate2 setting
+whisper_device: "cuda"
+ollama_model: "qwen2.5:3b-instruct"
+
+# --- Selection ---
+clip_min_seconds: 30
+clip_max_seconds: 60
+clips_per_video: 2
+
+# --- Policy ---
+human_review: true                                    # locked true for first 2 weeks
+banlist:
+  - "suicide"
+  - "self-harm"
+  - "racial slur"
+hook_sanity_min_score: 3                              # /5; rejects below
+profanity_max_score: 5                                # better-profanity scale; tune empirically
+
+# --- Quality ---
+min_speech_density: 1.5                               # words per second
+min_word_confidence: 0.6
+dedup_lookback_days: 90
+phash_min_hamming: 8
+
+# --- Render ---
+output_resolution: [1080, 1920]
+top_pane_height: 960
+bottom_pane_height: 960
+nvenc_preset: "p5"
+nvenc_cq: 23
+loudness_target_lufs: -14.0
+
+# --- Gameplay rotation ---
+gameplay_pool:
+  - "data/gameplay/subway.mp4"
+  - "data/gameplay/minecraft.mp4"
+  - "data/gameplay/gta.mp4"
+
+# --- Quota ---
+youtube_quota_daily_units: 10000
+youtube_quota_ceiling_units: 9000                     # uploader aborts before crossing this
+videos_insert_unit_cost: 1600
+search_list_unit_cost: 100
+videos_list_unit_cost: 1
+
+# --- Retention (days) ---
+retention:
+  raw_video: 14
+  transcript: 90
+  output_post_upload: 7
+  rejected_clips: 30
+  dup_hashes: 90
+  quota_usage: 90
+  vacuum_every_days: 30
+
+# --- Paths (rarely changed) ---
+paths:
+  state_db: "data/state.db"
+  raw_dir: "data/raw"
+  transcripts_dir: "data/transcripts"
+  pending_dir: "output/pending"
+  approved_dir: "output/approved"
+  rejected_dir: "output/rejected"
+  dry_run_dir: "output/dry_run"
+  logs_dir: "logs"
+  oauth_token: "data/oauth_token.json"
+  client_secrets: "data/client_secret.json"

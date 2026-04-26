@@ -1,0 +1,6 @@
+*
+!.gitignore
+!pending/
+!approved/
+!rejected/
+!dry_run/

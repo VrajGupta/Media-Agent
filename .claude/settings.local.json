@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& 'C:\\\\Users\\\\cryptix\\\\AppData\\\\Local\\\\Programs\\\\Ollama\\\\ollama.exe' pull qwen2.5:3b-instruct)"
+    ]
+  }
+}
