@@ -35,15 +35,25 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 - [x] **Acceptance:** `python -m src.bootstrap --check` returns green: ffmpeg + NVENC + CUDA + Whisper load + YT OAuth + Ollama reachable + qwen2.5:3b pulled all OK.
 
 ## Phase 1 — Discovery Agent + Quota Ledger
-- [ ] SQLite schema (`videos`, `clips`, `uploads`, `runs`, `gameplay_cursor`, `quota_usage`, `dup_hashes`)
-- [ ] `state/repository.py` thin DAL
-- [ ] `quota_ledger/ledger.py` — `record(endpoint, units)`, `today_total()`, `would_exceed(units, ceiling=9000)`
-- [ ] `discovery/search.py` — `search.list` wrapper, `relevanceLanguage=en`, ledger-metered
-- [ ] `discovery/enrich.py` — `videos.list` enrichment, ledger-metered
-- [ ] Virality scoring function (concrete formula from `executive_plan.md` §5.1)
-- [ ] Rolling-30d niche-median views table + recompute step
-- [ ] CLI: `python -m src.discovery --keyword "..."`
-- [ ] **Acceptance:** ≥30 candidates per keyword; quota ledger shows ≤1,800 units used; rerunning is a no-op (idempotent).
+- [x] SQLite schema (`videos`, `clips`, `uploads`, `runs`, `gameplay_cursor`, `quota_usage`, `dup_hashes`) — landed in Phase 0; Phase 1 added `discovery_attempts` for outcome-independent idempotency.
+- [x] `state/repository.py` thin DAL — Phase 1 appended `discovery_upsert_video` (status-preserving), `historical_views_for_keyword`, `niche_median_views`, `upsert_niche_baseline`, `record_discovery_attempt`, `is_in_cooldown`.
+- [x] `quota_ledger/ledger.py` — Phase 0 module wired into discovery via conservative recording rule (`HttpError` → record; `ConnectionError`/`socket.timeout` → no record).
+- [x] `discovery/search.py` — paginated `search.list` wrapper, `relevanceLanguage=en`, `videoDuration=any`, ledger-metered.
+- [x] `discovery/enrich.py` — `videos.list` batch enrichment (50 IDs/batch), parses ISO 8601 duration, handles hidden likeCount/commentCount/viewCount, ledger-metered.
+- [x] Virality scoring function — `discovery/virality.py`, exact formula from `executive_plan.md` §5.1, defensively clamps zero/negative inputs.
+- [x] Rolling-30d niche-median views — `niche_baselines` table populated via `compute_niche_median(fresh batch + last-30d historical)`; cold-start safe.
+- [x] CLI: `python -m src.discovery [--keyword K] [--force] [--dry-run] [--config alt.yaml]`.
+- [x] `src/integrations/youtube.py` — shared OAuth client (used by uploader in Phase 5).
+- [x] `tests/` — 31 pytest tests covering virality formula, ISO 8601 duration, missing-stats handling, status-preserving upsert, cooldown guard, conservative quota recording (record on HTTP response, skip on ConnectionError, no record on preflight failure).
+- [x] **Acceptance (live, 2026-04-28):** Joe Rogan=35, stoicism=41, NBA highlights=80 candidates (gate ≥30); per-run quota max 504 units (gate ≤1,800); cooldown rerun produced 3 skip lines and 0 new quota rows; force-rerun preserved a row marked 'downloaded' (Jvv1g3QMLL0) while refreshing its stats.
+
+### Phase 1 live verification (run when ready)
+1. `python -m src.discovery --dry-run --keyword "Joe Rogan"` — sanity-check pool quality before committing rows.
+2. `python -m src.discovery --keyword "Joe Rogan"`, then `--keyword "stoicism"`, then `--keyword "NBA highlights"`.
+3. `sqlite3 data/state.db "SELECT keyword, COUNT(*) FROM videos GROUP BY keyword;"` → expect ≥30 per keyword.
+4. `sqlite3 data/state.db "SELECT date, endpoint, SUM(units) FROM quota_usage GROUP BY date, endpoint;"` → expect total ≤1,800 (predicted ~600).
+5. Re-run `python -m src.discovery` immediately → expect 3 cooldown-skip lines, zero new `quota_usage` rows.
+6. `UPDATE videos SET status='downloaded' WHERE video_id=<one>;` then `python -m src.discovery --force --keyword "Joe Rogan"` → confirm that row's `status` is still `downloaded` and `views`/`updated_at` got refreshed.
 
 ## Phase 2 — Downloader
 - [ ] `downloader/ytdlp.py` wrapper

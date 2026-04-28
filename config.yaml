@@ -13,7 +13,9 @@ keywords:
   - "Joe Rogan"
   - "stoicism"
   - "NBA highlights"
-search_max_results_per_keyword: 30
+search_max_results_per_keyword: 50                    # maxResults per search.list page (API caps at 50)
+discovery_max_inspected_per_keyword: 200              # total UNIQUE IDs to fetch via pagination
+discovery_min_interval_hours: 6                       # cooldown for the idempotency guard
 min_source_duration_seconds: 300                      # 5 minutes
 recency_window_days: 30
 virality_score_threshold: 1.0

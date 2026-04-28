@@ -39,6 +39,8 @@ class Config(BaseModel):
 
     keywords: list[str]
     search_max_results_per_keyword: int
+    discovery_max_inspected_per_keyword: int = 100
+    discovery_min_interval_hours: int = 6
     min_source_duration_seconds: int
     recency_window_days: int
     virality_score_threshold: float

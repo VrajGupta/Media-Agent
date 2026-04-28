@@ -99,3 +99,12 @@ CREATE TABLE IF NOT EXISTS niche_baselines (
     sample_size        INTEGER NOT NULL,
     computed_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS discovery_attempts (
+    -- one row per keyword; outcome-independent (zero-survivor runs still write).
+    -- Cooldown comparison is performed in SQL via datetime('now', '-N hours').
+    keyword            TEXT PRIMARY KEY,
+    last_attempted_at  TEXT NOT NULL,                -- naive UTC string from datetime('now')
+    last_inspected     INTEGER NOT NULL,
+    last_inserted      INTEGER NOT NULL
+);

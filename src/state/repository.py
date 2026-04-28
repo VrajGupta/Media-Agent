@@ -90,6 +90,125 @@ class Repository:
     def clips_by_status(self, status: str) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM clips WHERE status=?", (status,)).fetchall()
 
+    # ---- discovery: status-preserving upsert ----
+
+    def discovery_upsert_video(
+        self,
+        *,
+        video_id: str,
+        title: str,
+        channel: str,
+        duration_seconds: int,
+        views: int,
+        likes: int,
+        comments: int,
+        published_at: str,
+        keyword: str,
+        virality_score: float,
+    ) -> None:
+        """Insert a new candidate as 'discovered'; on conflict refresh stats only.
+
+        Critically does NOT touch status, rejection_reason, keyword, or
+        discovered_at on existing rows — so a rerun of discovery cannot regress
+        a downloaded/uploaded video back to 'discovered'.
+        """
+        self.conn.execute(
+            """
+            INSERT INTO videos (
+                video_id, title, channel, duration_seconds,
+                views, likes, comments, published_at,
+                keyword, virality_score, status
+            ) VALUES (
+                :video_id, :title, :channel, :duration_seconds,
+                :views, :likes, :comments, :published_at,
+                :keyword, :virality_score, 'discovered'
+            )
+            ON CONFLICT(video_id) DO UPDATE SET
+                title            = excluded.title,
+                channel          = excluded.channel,
+                duration_seconds = excluded.duration_seconds,
+                views            = excluded.views,
+                likes            = excluded.likes,
+                comments         = excluded.comments,
+                virality_score   = excluded.virality_score,
+                updated_at       = datetime('now')
+            """,
+            {
+                "video_id": video_id,
+                "title": title,
+                "channel": channel,
+                "duration_seconds": duration_seconds,
+                "views": views,
+                "likes": likes,
+                "comments": comments,
+                "published_at": published_at,
+                "keyword": keyword,
+                "virality_score": virality_score,
+            },
+        )
+
+    # ---- niche baselines ----
+
+    def historical_views_for_keyword(self, keyword: str, days: int) -> list[int]:
+        cutoff = f"-{int(days)} days"
+        rows = self.conn.execute(
+            "SELECT views FROM videos WHERE keyword=? AND discovered_at >= datetime('now', ?)",
+            (keyword, cutoff),
+        ).fetchall()
+        return [int(r["views"]) for r in rows]
+
+    def niche_median_views(self, keyword: str) -> int:
+        row = self.conn.execute(
+            "SELECT median_views FROM niche_baselines WHERE keyword=?",
+            (keyword,),
+        ).fetchone()
+        return int(row["median_views"]) if row else 1
+
+    def upsert_niche_baseline(
+        self, keyword: str, median_views: int, sample_size: int
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO niche_baselines (keyword, median_views, sample_size)
+            VALUES (?, ?, ?)
+            ON CONFLICT(keyword) DO UPDATE SET
+                median_views = excluded.median_views,
+                sample_size  = excluded.sample_size,
+                computed_at  = datetime('now')
+            """,
+            (keyword, int(median_views), int(sample_size)),
+        )
+
+    # ---- discovery attempts (idempotency) ----
+
+    def record_discovery_attempt(
+        self, keyword: str, inspected_count: int, inserted_count: int
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO discovery_attempts (
+                keyword, last_attempted_at, last_inspected, last_inserted
+            ) VALUES (?, datetime('now'), ?, ?)
+            ON CONFLICT(keyword) DO UPDATE SET
+                last_attempted_at = datetime('now'),
+                last_inspected    = excluded.last_inspected,
+                last_inserted     = excluded.last_inserted
+            """,
+            (keyword, int(inspected_count), int(inserted_count)),
+        )
+
+    def is_in_cooldown(self, keyword: str, hours: int) -> bool:
+        cutoff = f"-{int(hours)} hours"
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM discovery_attempts
+            WHERE keyword = ?
+              AND last_attempted_at > datetime('now', ?)
+            """,
+            (keyword, cutoff),
+        ).fetchone()
+        return row is not None
+
     # ---- runs ----
 
     def start_run(self, kind: str) -> int:
