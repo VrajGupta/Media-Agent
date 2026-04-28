@@ -68,7 +68,7 @@
 - **OpenCV** — not needed; ffmpeg handles all the cropping/scaling.
 - **APScheduler / Celery / Redis / Postgres** — overkill given Windows Task Scheduler + native YouTube `publishAt` cover the scheduling needs.
 - **Learned dedup model (CLIP / video embeddings)** — `imagehash` + audio fingerprint is sufficient at this scale (28 clips/week, 90-day window ≈ 360 entries). A learned model would add a GPU dependency and training pipeline for ~zero accuracy gain at 90-day, single-channel scope.
-- **Email-on-critical alerting** — Discord webhook is sufficient for v1; SMTP setup is friction without proportional value while the user is actively monitoring.
+- **Email-on-critical alerting / Discord webhooks** — `logs/alerts.md` is sufficient for v1 (single-user, on-demand reading); push-notification setup is friction without proportional value while the user is actively monitoring the channel.
 - **TikTok / Instagram SDKs** — out of scope for v1 per user.
 - **Cloud transcription (AssemblyAI, Deepgram)** — local Whisper is good enough and free.
 

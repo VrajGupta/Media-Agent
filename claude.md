@@ -6,7 +6,7 @@ A fire-and-forget Python agent that automates a "repost / brainrot Shorts" YouTu
 ## Scope (v1)
 - **Source:** third-party long-form videos, transformatively reformatted.
 - **Output platform:** YouTube Shorts only. TikTok and Instagram are explicitly out of scope.
-- **Mode:** fully autonomous, no human approval step.
+- **Mode:** fully autonomous in steady state. `human_review=true` is locked on for the first 2 weeks (filesystem-based; user drags approved clips from `output/pending/` → `output/approved/`).
 - **Operational model (Path B — hybrid):**
   - **Weekly heavy run** — `weekly_run.py` triggered by Windows Task Scheduler once a week, ~1h. Discovers, downloads, selects, renders, and assigns each clip a `publish_at` timestamp spread across the next 7 days.
   - **Daily upload run** — `daily_upload.py` triggered by Windows Task Scheduler once a day, ~5 min. Uploads that day's clips to YouTube with `privacyStatus=private` + `publishAt=<slot>`, letting YouTube auto-publish at the slot.
@@ -14,14 +14,14 @@ A fire-and-forget Python agent that automates a "repost / brainrot Shorts" YouTu
 - **Runtime:** the user's Windows PC (not the Mac this repo lives on). Code is developed here, then transferred to the PC.
 
 ## Stack
-Python 3.11+ · ffmpeg · yt-dlp · faster-whisper · YouTube Data API v3 · Anthropic Claude Haiku · APScheduler · SQLite. See `skills.md` for the full rationale.
+Python 3.11+ · ffmpeg+NVENC · yt-dlp · faster-whisper (CUDA) · YouTube Data API v3 · Ollama (`qwen2.5:3b-instruct`, local) · Windows Task Scheduler · SQLite. See `skills.md` for the full rationale. **Cost: $0/month.**
 
 ## Architecture in one diagram (v1.1)
 ```
 [Windows Task Scheduler — weekly]
    └─ weekly_run.py:
         keywords → discovery (quota_ledger) → downloader → lang_detect
-                → selector (Whisper + heatmap-or-fallback + Claude Haiku)
+                → selector (Whisper + heatmap-or-fallback + Ollama qwen2.5:3b)
                 → policy_gate (banlist / profanity / NSFW / hook-sanity)
                 → editor (ffmpeg + NVENC + ASS karaoke) → output/pending/{date}__{slot}__{slug}.mp4
                 → quality_screen (speech density, sub-conf, pHash + audio dedup)
@@ -48,7 +48,7 @@ Python 3.11+ · ffmpeg · yt-dlp · faster-whisper · YouTube Data API v3 · Ant
 - Quota ledger meters every billed call; weekly run aborts before exceeding 9,000 units/day.
 - Per-phase acceptance criteria added to `plan.md`.
 - Retention TTLs: raw 14 d, transcripts 90 d, queue 7 d post-upload, dup_hashes/quota_usage 90 d, monthly VACUUM.
-- Observability: Discord webhook for run failure / quota near-cap / upload reject / missed-slot recovery / weekly finished.
+- Observability: filesystem-based — `loguru` → `logs/agent.log`, append-only `logs/alerts.md` for run failure / quota near-cap / upload reject / missed-slot recovery / weekly finished.
 - `--dry-run` mode on uploader; `bootstrap --check` for env health.
 - Crop = **center crop** in v1; subject tracking deferred to Phase 8.
 Each stage is independent and idempotent, communicating via the SQLite state store. See `agents.md` for module-by-module detail.
@@ -58,11 +58,11 @@ Each stage is independent and idempotent, communicating via the SQLite state sto
 - `agents.md` — module responsibilities and data flow.
 - `skills.md` — libraries/APIs and the reasoning behind each.
 - `progress.md` — running checklist; **update after every completed task.**
-- `src/` — code (not yet created).
-- `config.yaml`, `.env` — runtime config & secrets (not yet created).
+- `src/` — code (Phase 0 modules in place: `config_loader/`, `state/`, `quota_ledger/`, `observability/`, `bootstrap.py`).
+- `config.yaml` — runtime config (committed). `.env` — secrets (gitignored). `data/client_secret.json` + `data/oauth_token.json` — YouTube OAuth (gitignored).
 
 ## Decisions already locked
-- Engagement signal = YouTube `mostReplayed` heatmap + transcript-driven LLM ranking (Claude Haiku).
+- Engagement signal = YouTube `mostReplayed` heatmap + transcript-driven LLM ranking (local Ollama `qwen2.5:3b-instruct`, JSON-mode, fixed rubric prefix).
 - Vertical layout = top half source video (face/center crop), bottom half random-seeked gameplay loop.
 - Subtitles = karaoke-style word-by-word, burned via ASS + libass.
 - Default cadence: 4 clips/day × 7 days = 28 clips/week. Configurable via `clips_per_day` and `days_per_run`.

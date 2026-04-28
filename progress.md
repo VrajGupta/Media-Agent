@@ -106,7 +106,7 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 - [ ] `slot_planner.py` — assigns `publish_at_utc` evenly across `days_per_run` × `upload_slots`; TZ-aware via `zoneinfo`
 - [ ] `weekly_run.py` — discovery → download → lang_detect → select → policy_gate → render → quality_screen → slot_plan → retention
 - [ ] `daily_upload.py` — pulls today's clips, re-runs policy_gate, uploads with `publishAt`, respects quota guard
-- [ ] Missed-slot recovery: stale `publish_at_utc` padded to `now + 20 min`, logged as `recovered_slot`, Discord-alerted
+- [ ] Missed-slot recovery: stale `publish_at_utc` padded to `now + 20 min`, logged as `recovered_slot`, row appended to `logs/alerts.md`
 - [ ] `bootstrap.py` — single-clip end-to-end smoke test
 - [ ] `bootstrap.py --check` — env health check
 - [ ] Windows Task Scheduler XML exports under `scripts/` (`weekly_run.xml`, `daily_upload.xml`)
@@ -132,7 +132,7 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 - [ ] All paths/tunables read from `config.yaml` (`clips_per_day`, `days_per_run`, `upload_slots`, `timezone`, `human_review`, `banlist`, `ollama_model`, `whisper_model`)
 - [ ] README with PC setup + Task Scheduler import steps
 - [ ] Document quota-increase audit form steps in README (deferred action item)
-- [ ] **Acceptance:** logs rotate; Discord alerts fire on synthetic triggers; cleanup deletes correct files; double-running `weekly_run` is a no-op.
+- [ ] **Acceptance:** logs rotate; `logs/alerts.md` rows appear on synthetic triggers (run failure, quota > 80%, upload reject, missed-slot recovery); cleanup deletes correct files; double-running `weekly_run` is a no-op.
 
 ## Phase 8 — Stretch (deferred)
 - [ ] Subject tracking (face/saliency-aware crop) replacing center-crop

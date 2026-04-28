@@ -27,9 +27,8 @@ Fully automated agent that searches YouTube by keyword, picks the most viral mom
 - Set up Python venv, install dependencies, verify ffmpeg on PATH.
 - Create Google Cloud project; enable YouTube Data API v3.
 - Create OAuth 2.0 Desktop client; complete first OAuth flow; cache refresh token.
-- Get Anthropic API key (for clip selection LLM).
 - Acquire 1–3 royalty-free background gameplay clips (10+ min each, 1080×1920).
-- Install Ollama on the PC; `ollama pull qwen2.5:3b-instruct`.
+- Install Ollama on the PC; `ollama pull qwen2.5:3b-instruct` (replaces the v1.0 Anthropic dependency — stack is fully free).
 - Project skeleton: `src/`, `data/`, `data/gameplay/`, `data/transcripts/`, `output/pending/`, `output/approved/`, `output/rejected/`, `output/dry_run/`, `logs/`, `scripts/`, `config.yaml`, `.env`.
 
 ## Phase 1 — Discovery Agent (Day 2)
@@ -58,7 +57,7 @@ Fully automated agent that searches YouTube by keyword, picks the most viral mom
 
 ## Phase 3 — Clip Selection (Day 3–5)
 - **Language detection first:** transcribe first 60 s; if Whisper detected language ≠ `en` w/ confidence ≥ 0.7, mark `rejected_language` and skip.
-- Pull `mostReplayed` heatmap via undocumented endpoint. **Fallback validation:** track `heatmap_hit_rate` per run; if < 70%, run continues but tags clips `selection_method='transcript_only'` and emits Discord warning. First 2 weeks: manual spot-check of 5 transcript-only vs 5 heatmap-aided clips per week to validate quality gap ≤ 1.0/5.
+- Pull `mostReplayed` heatmap via undocumented endpoint. **Fallback validation:** track `heatmap_hit_rate` per run; if < 70%, run continues but tags clips `selection_method='transcript_only'` and appends a warning row to `logs/alerts.md`. First 2 weeks: manual spot-check of 5 transcript-only vs 5 heatmap-aided clips per week to validate quality gap ≤ 1.0/5.
 - Transcribe full video with `faster-whisper` `large-v3` int8_float16 on CUDA. Cache transcripts under `data/transcripts/`.
 - Slice transcript into 30–60 s windows aligned with sentence boundaries.
 - Send window candidates + heatmap peaks (when present) to local Ollama (`qwen2.5:3b-instruct`, JSON-mode) with a fixed rubric prefix (kv-cache reused) → returns top N `(start, end, hook, suggested_title)`.
@@ -104,17 +103,17 @@ Fully automated agent that searches YouTube by keyword, picks the most viral mom
 - **No long-running daemon.** Entrypoints, all invoked by Windows Task Scheduler or manually:
   - `python -m src.weekly_run` — full pipeline: discover → download → lang_detect → select → policy_gate → render → quality_screen → slot_planner.
   - `python -m src.daily_upload` — selects clips whose `publish_at_utc` falls within today's local-TZ window, re-runs `policy_gate`, uploads with the clip's `publishAt`.
-  - `python -m src.bootstrap --check` — env health check (ffmpeg/NVENC/CUDA/Whisper/YT auth/Anthropic auth).
+  - `python -m src.bootstrap --check` — env health check (ffmpeg/NVENC/CUDA/Whisper/YT OAuth/Ollama reachable + model pulled).
   - `python -m src.bootstrap` — single-clip end-to-end smoke test.
 - **Time semantics:** canonical timezone is config (`timezone: Asia/Singapore`). `publish_at_utc` stored UTC; converted via `zoneinfo`. Slot planner spreads N×D clips across `upload_slots: ["09:00","13:00","17:00","21:00"]` over `days_per_run`.
-- **Missed-slot recovery:** if `daily_upload` finds clips with `publish_at_utc` already in the past (PC was off), it pads them to `now + 20 min` rather than asking YouTube to publish in the past. Logged as `recovered_slot` and Discord-alerted.
+- **Missed-slot recovery:** if `daily_upload` finds clips with `publish_at_utc` already in the past (PC was off), it pads them to `now + 20 min` rather than asking YouTube to publish in the past. Logged as `recovered_slot` and a row appended to `logs/alerts.md`.
 - All single-process, SQLite as state. Graceful resume on partial failure.
 - **Acceptance:** weekly_run produces 28 ready clips; daily_upload publishes 4/day for 7 days with no missed slots when PC online; missed-slot recovery exercised.
 
 ## Phase 7 — Hardening (Day 9–10)
 - Structured logging (`loguru`) → `logs/agent.log`, daily rotation, 30-day retention.
 - Retry with backoff (`tenacity`) on API/network errors; quarantine on repeated failure.
-- **Alerts file** (`logs/alerts.md`): weekly run finished, run failure, quota > 80% used, upload rejected, missed-slot recovery. Markdown table; user reads on demand.
+- **Alerts file** (`logs/alerts.md`): weekly run finished, run failure, quota > 80% used, upload rejected, missed-slot recovery. Markdown table; user reads on demand. (No Discord webhook — filesystem-based alerting only.)
 - **Retention/cleanup module** at end of `weekly_run`:
   - `data/raw/*.mp4` → delete 14 days post-download or after all derived clips uploaded, whichever later.
   - `data/transcripts/*.json` → 90-day TTL.
@@ -122,12 +121,12 @@ Fully automated agent that searches YouTube by keyword, picks the most viral mom
   - `dup_hashes` rows older than 90 days pruned.
   - SQLite `VACUUM` monthly.
 - Per-run summary appended to `logs/runs.md`.
-- Config-driven (`config.yaml`): keywords, `clips_per_day`, `days_per_run`, `upload_slots`, `timezone`, `human_review`, `banlist`, `discord_webhook`, model sizes, paths.
+- Config-driven (`config.yaml`): keywords, `clips_per_day`, `days_per_run`, `upload_slots`, `timezone`, `human_review`, `banlist`, model sizes, paths.
 - **Windows Task Scheduler** entries committed as `.xml` exports under `scripts/`:
   - `weekly_run.xml` — Sundays 02:00 local TZ.
   - `daily_upload.xml` — daily 09:00 local TZ.
 - Document quota-increase audit form steps in `README.md`.
-- **Acceptance:** logs rotate; Discord alerts fire on synthetic triggers; cleanup deletes correct files; double-running `weekly_run` is a no-op.
+- **Acceptance:** logs rotate; `logs/alerts.md` rows appear on synthetic triggers (run failure, quota > 80%, upload reject, missed-slot recovery); cleanup deletes correct files; double-running `weekly_run` is a no-op.
 
 ## Phase 8 — Stretch (post-v1)
 - Thumbnail auto-generation.

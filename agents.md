@@ -36,7 +36,7 @@ Threshold to enter selection: `virality_score ≥ 1.0`.
 **Outputs:** rows in `clips` table (`clip_id`, `video_id`, `start_s`, `end_s`, `hook`, `suggested_title`, `selection_method` (`heatmap_aided` | `transcript_only`), `publish_at_utc` (filled later by slot planner), `status='selected'`).
 **Sub-steps:**
 - `transcriber.py` — faster-whisper → word-level JSON, cached to `data/transcripts/`.
-- `heatmap.py` — fetch `mostReplayed` markers; **fallback validation**: if per-run `heatmap_hit_rate < 70%`, emit Discord warning. First 2 weeks: manual spot-check 5+5 transcript-only vs heatmap-aided clips/week to bound quality gap ≤ 1.0/5.
+- `heatmap.py` — fetch `mostReplayed` markers; **fallback validation**: if per-run `heatmap_hit_rate < 70%`, append a warning row to `logs/alerts.md`. First 2 weeks: manual spot-check 5+5 transcript-only vs heatmap-aided clips/week to bound quality gap ≤ 1.0/5.
 - `ranker.py` — local Ollama (`qwen2.5:3b-instruct`) w/ JSON-mode output and a fixed rubric prefix (kv-cache reused across calls): hook strength, payoff, self-contained, controversy/curiosity, no slow intro.
 
 ## 3.5. `policy_gate/` — Policy & Safety Gate (NEW)
@@ -118,8 +118,8 @@ SQLite at `data/state.db`. Tables: `videos`, `clips`, `uploads`, `runs`, `gamepl
 `gameplay_cursor` table: `(file_name PK, last_offset_s, last_used_at)`. Pool order: Subway → Minecraft → GTA, round-robin per clip. Each clip consumes `clip_duration` seconds starting at the file's `last_offset_s`. When `last_offset_s + clip_duration > file_duration`, wrap to 0. A separate `pool_pointer` row tracks which file is next in the round-robin so episode N+1 always advances to the next file.
 
 ## 9. `config/` — Config & Secrets
-- `config.yaml` — keywords, `clips_per_day`, `days_per_run`, `upload_slots`, `timezone`, `human_review`, `banlist`, `discord_webhook`, model sizes, paths, gameplay pool.
-- `.env` — `ANTHROPIC_API_KEY`, `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`.
+- `config.yaml` — keywords, `clips_per_day`, `days_per_run`, `upload_slots`, `timezone`, `human_review`, `banlist`, model sizes, paths, gameplay pool.
+- `.env` — optional overrides (e.g. `OLLAMA_HOST`). YouTube OAuth lives in `data/client_secret.json` + `data/oauth_token.json` (both gitignored).
 
 ## 10. `retention/` — Cleanup (NEW)
 **Job:** Free disk and prune state at the end of `weekly_run`.
@@ -162,5 +162,5 @@ keywords → [discovery] (quota_ledger metered) → videos table
    (Windows Task Scheduler — daily) → [daily_upload] →
                        [policy_gate] (re-check) → [uploader] (quota_ledger metered, --dry-run aware) → YouTube (scheduled)
                               ↑
-              [observability] (loguru + Discord webhook) ← every stage
+              [observability] (loguru → logs/agent.log + logs/alerts.md) ← every stage
 ```
