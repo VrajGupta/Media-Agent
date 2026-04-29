@@ -56,11 +56,23 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 6. `UPDATE videos SET status='downloaded' WHERE video_id=<one>;` then `python -m src.discovery --force --keyword "Joe Rogan"` → confirm that row's `status` is still `downloaded` and `views`/`updated_at` got refreshed.
 
 ## Phase 2 — Downloader
-- [ ] `downloader/ytdlp.py` wrapper
-- [ ] Idempotent download with disk-budget check
-- [ ] Status transitions in state DB
-- [ ] CLI: `python -m src.downloader`
-- [ ] **Acceptance:** rerun does zero re-downloads; disk-budget eviction triggers at config threshold.
+- [x] `downloader/ytdlp_runner.py` — probe (no-download metadata read) + `download_one` with strict 720p–1080p band, sidecar cleanup helper.
+- [x] Idempotent download — three-layer guard: probe rejects no-720p sources without bandwidth burn; existing-file + status-discovered auto-repairs to `downloaded`; second run is a clean no-op.
+- [x] Status transitions: `discovered → downloaded | rejected_format | rejected_download`. Schema comment updated; `status` column is free-form TEXT (no migration needed).
+- [x] `disk_budget.py` — soft cap (50 GB), hard cap (100 GB), free-disk safety floor (5 GB). Eviction loop deletes oldest fully-uploaded raw mp4s; refuses to delete videos with zero clips or non-uploaded clips. **Phase 2 caveat:** eviction has zero eligible victims until Phase 5 starts uploading clips — the hard cap protects the disk meanwhile.
+- [x] Post-download hard-cap re-check unlinks oversized writes and marks `rejected_download`.
+- [x] CLI: `python -m src.downloader [--video-id <id>] [--config alt.yaml]` with predictable semantics for missing/already-rejected/already-downloaded/file-missing rows.
+- [x] `tests/` — 9 new tests (disk_budget x8, format selector x2, idempotency x3, status transitions x4, eviction safety x3, hard-cap post-download x1, soft-cap no-victims x1, sidecar cleanup x3, repo evictable matrix). 56 total tests green.
+- [x] **Acceptance (live, 2026-04-29):** full sweep produced 156 downloaded / 1 rejected_download / 2 rejected_format (159 candidates total, all resolved); 54.7 GB used (under 100 GB hard cap); idempotent rerun was a clean no-op; eviction smoke test deleted exactly 1 fake-uploaded video and freed 647 MB.
+
+### Phase 2 live verification (run when ready)
+1. `python -m src.bootstrap --init-db` (idempotent — schema-comment-only update).
+2. `pytest tests/` — expect 56 passing.
+3. **First single-video download:** `python -m src.downloader --video-id <one Joe Rogan id>` — confirm `data/raw/<id>.mp4` is 100–500 MB and the row's status is `downloaded`.
+4. **Idempotent rerun:** same command immediately. Expect `skip: already downloaded`, no new file write.
+5. **Crash-gap repair:** `UPDATE videos SET status='discovered' WHERE video_id='<that id>';` then re-run the same command. Expect `repaired orphan`, status flips back to `downloaded`, no re-fetch.
+6. **Full sweep:** `python -m src.downloader`. Expect ~145–155 sequential downloads over 15–30 minutes. Status counts: `downloaded ≈ 145–155`, `rejected_format ≈ 0–6`, `rejected_download ≈ 0–5`.
+7. **Eviction smoke test (synthetic):** insert a fake `clips` row marked `uploaded` for one downloaded video, then re-run the downloader; expect the eviction loop log to free that file.
 
 ## Phase 2.5 — Language Detection (NEW)
 - [ ] `lang_detect/detect.py` — Whisper on first 60 s, reject `≠ en` w/ confidence ≥ 0.7

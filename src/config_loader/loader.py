@@ -64,6 +64,13 @@ class Config(BaseModel):
     dedup_lookback_days: int
     phash_min_hamming: int
 
+    disk_soft_cap_gb: int = 50
+    disk_hard_cap_gb: int = 100
+    free_disk_safety_floor_gb: int = 5
+    download_min_height: int = 720
+    download_max_height: int = 1080
+    download_estimated_bytes_per_video: int = 524288000
+
     output_resolution: list[int]
     top_pane_height: int
     bottom_pane_height: int

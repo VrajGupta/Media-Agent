@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS videos (
     published_at       TEXT NOT NULL,                -- ISO 8601 UTC
     keyword            TEXT NOT NULL,
     virality_score     REAL NOT NULL,
-    status             TEXT NOT NULL,                -- discovered|downloaded|transcribed|selected|rejected_language|done
+    status             TEXT NOT NULL,                -- discovered|downloaded|transcribed|selected|rejected_language|rejected_format|rejected_download|done
     rejection_reason   TEXT,
     discovered_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT NOT NULL DEFAULT (datetime('now'))

@@ -60,6 +60,59 @@ class Repository:
     def videos_by_status(self, status: str) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM videos WHERE status=?", (status,)).fetchall()
 
+    def get_video(self, video_id: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM videos WHERE video_id=?", (video_id,)
+        ).fetchone()
+
+    def videos_for_download(self) -> list[sqlite3.Row]:
+        """Discovered candidates ordered for the downloader.
+
+        Highest virality score first so the best material lands when budget is tight.
+        Stable secondary order (`video_id ASC`) for deterministic reruns.
+        """
+        return self.conn.execute(
+            "SELECT * FROM videos WHERE status='discovered' "
+            "ORDER BY virality_score DESC, video_id ASC"
+        ).fetchall()
+
+    def evictable_video_ids(self) -> list[str]:
+        """Video IDs whose every derived clip is uploaded; oldest first.
+
+        Excludes videos with zero clips — we can't safely delete a source whose
+        derivatives haven't been generated yet, even if status='downloaded'.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT v.video_id FROM videos v
+            WHERE EXISTS (SELECT 1 FROM clips c WHERE c.video_id = v.video_id)
+              AND NOT EXISTS (
+                  SELECT 1 FROM clips c
+                  WHERE c.video_id = v.video_id AND c.status != 'uploaded'
+              )
+            ORDER BY v.updated_at ASC
+            """
+        ).fetchall()
+        return [r["video_id"] for r in rows]
+
+    def is_raw_evictable(self, video_id: str) -> bool:
+        """Single-method safety check: ≥1 clip AND all clips uploaded.
+
+        Critically returns False for videos with zero clips so a stray call site
+        can't accidentally delete a source whose derivatives haven't been made.
+        """
+        row = self.conn.execute(
+            """
+            SELECT
+                EXISTS(SELECT 1 FROM clips WHERE video_id=:vid) AS has_any,
+                NOT EXISTS(
+                    SELECT 1 FROM clips WHERE video_id=:vid AND status != 'uploaded'
+                ) AS all_uploaded
+            """,
+            {"vid": video_id},
+        ).fetchone()
+        return bool(row["has_any"]) and bool(row["all_uploaded"])
+
     # ---- clips ----
 
     def insert_clip(self, **fields) -> None:

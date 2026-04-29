@@ -46,6 +46,14 @@ min_word_confidence: 0.6
 dedup_lookback_days: 90
 phash_min_hamming: 8
 
+# --- Downloader ---
+disk_soft_cap_gb: 50                                  # eviction loop runs above this (no-op until clips upload in Phase 5)
+disk_hard_cap_gb: 100                                 # downloader refuses to run above this
+free_disk_safety_floor_gb: 5                          # halt if filesystem free space below this
+download_min_height: 720                              # reject anything below
+download_max_height: 1080                             # ceiling; yt-dlp picks 1080 when available
+download_estimated_bytes_per_video: 524288000         # 500 MB; fallback when probe lacks filesize
+
 # --- Render ---
 output_resolution: [1080, 1920]
 top_pane_height: 960
