@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS videos (
     keyword            TEXT NOT NULL,
     virality_score     REAL NOT NULL,
     status             TEXT NOT NULL,                -- discovered|downloaded|lang_ok|transcribed|selected|rejected_language|rejected_format|rejected_download|done
+                                                     -- Phase 3 transitions: lang_ok -> transcribed (after atomic transcript cache write)
+                                                     --                  -> selected   (after clip rows inserted in repo.tx())
     rejection_reason   TEXT,
     discovered_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT NOT NULL DEFAULT (datetime('now'))

@@ -131,6 +131,55 @@ class Repository:
             f"INSERT OR REPLACE INTO clips ({cols}) VALUES ({placeholders})", fields
         )
 
+    def upsert_selector_clip(
+        self,
+        *,
+        clip_id: str,
+        video_id: str,
+        start_s: float,
+        end_s: float,
+        hook: str,
+        suggested_title: str,
+        selection_method: str,
+    ) -> None:
+        """Selector-owned upsert. Touches only selector columns on conflict.
+
+        Critically does NOT clobber publish_at_utc, publish_slot_local, output_path,
+        youtube_video_id, or title_slug — those are populated by Phases 4 (editor),
+        5 (uploader), and 6 (slot_planner). A `--force` re-rank on a clip whose
+        downstream metadata is already filled must preserve that metadata so we
+        don't accidentally erase a scheduled or rendered clip's pointer state.
+        """
+        self.conn.execute(
+            """
+            INSERT INTO clips (
+                clip_id, video_id, start_s, end_s,
+                hook, suggested_title, selection_method, status
+            ) VALUES (
+                :clip_id, :video_id, :start_s, :end_s,
+                :hook, :suggested_title, :selection_method, 'selected'
+            )
+            ON CONFLICT(clip_id) DO UPDATE SET
+                start_s          = excluded.start_s,
+                end_s            = excluded.end_s,
+                hook             = excluded.hook,
+                suggested_title  = excluded.suggested_title,
+                selection_method = excluded.selection_method,
+                status           = 'selected',
+                rejection_reason = NULL,
+                updated_at       = datetime('now')
+            """,
+            {
+                "clip_id": clip_id,
+                "video_id": video_id,
+                "start_s": float(start_s),
+                "end_s": float(end_s),
+                "hook": hook,
+                "suggested_title": suggested_title,
+                "selection_method": selection_method,
+            },
+        )
+
     def set_clip_status(
         self,
         clip_id: str,

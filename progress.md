@@ -93,15 +93,87 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 7. **Acceptance gate:** manually pick 5 known-English and 5 known-non-English videos, force-run lang_detect on each, verify all 10 verdicts are correct.
 
 ## Phase 3 — Clip Selection
-- [ ] `selector/transcriber.py` (faster-whisper large-v3 int8_float16, CUDA)
-- [ ] Transcript caching to `data/transcripts/`
-- [ ] `selector/heatmap.py` — `mostReplayed` fetch + per-run hit-rate tracking
-- [ ] Heatmap fallback validation: warn at hit-rate <70%; tag `selection_method` on each clip
-- [ ] Reviewer spot-check log (`logs/heatmap_qa.md`) for first 2 weeks (5 transcript-only vs 5 heatmap-aided per week)
-- [ ] `selector/ranker.py` — Ollama (`qwen2.5:3b-instruct`), JSON-mode, fixed rubric prefix
-- [ ] Window slicing (sentence-aligned 30–60 s)
-- [ ] CLI: `python -m src.selector`
-- [ ] **Acceptance:** first 10 clips manually rated, ≥7 "watchable hook"; transcript-only path ≥6/10.
+> Phase 2.5 covered language detection. Phase 3 starts at `status='lang_ok'`, ends at `status='selected'`. Status flow: `lang_ok → transcribed → selected`. Stops short of policy_gate (Phase 4.5) and editor (Phase 4).
+
+### Module skeleton
+- [x] `src/selector/__init__.py` re-exports.
+- [x] `src/selector/__main__.py` — CLI: `--video-id`, `--force` (re-rank from cache), `--retranscribe` (also re-pay Whisper), `--dry-run`, `--config`.
+- [x] `src/selector/runner.py` — `_preload_nvidia_dlls()` at top (mirrors [src/lang_detect/runner.py:22-56](src/lang_detect/runner.py#L22-L56)); `select_one_video`, `run_all`, `SelectorResult`, `SelectorOutcome` enum.
+
+### Transcriber (`selector/transcriber.py`)
+- [x] Full-video Whisper via `faster-whisper` `large-v3` `int8_float16` on CUDA. Iterate the segments generator.
+- [x] Word-level timestamps enabled (`word_timestamps=True`) so Phase 4 ASS subtitles can read straight from cache.
+- [x] Cache JSON written to `data/transcripts/{video_id}.json` with `{schema_version: 1, video_id, model, compute_type, duration_seconds, language, language_probability, segments[ {start,end,text,words[ {start,end,word,probability} ]} ]}`.
+- [x] **Atomic write**: serialize to `data/transcripts/{video_id}.json.tmp`, then `os.replace()` to final. Inference failure means no temp file is promoted; status stays `lang_ok` for next-run retry.
+- [x] Cache invalidation: silently re-transcribe + overwrite when cached `model` or `compute_type` ≠ `cfg.whisper_*`.
+- [x] Fail-soft on inference error: leave row at `lang_ok`, no transcript file written, error rolled up into the run-end alert.
+
+### Heatmap (`selector/heatmap.py`)
+- [x] `POST https://www.youtube.com/youtubei/v1/player` with hard-coded module-level constant `{"context":{"client":{"clientName":"WEB","clientVersion":"2.20240101.00.00"}},"videoId":...}`.
+- [x] 5 s timeout. One retry on `requests.ConnectionError` or 5xx response. No fixed sleep between calls.
+- [x] Parser walks `playerOverlays...heatmapRenderer.heatMarkers[]` → list of `(start_s, duration_s, intensity)` (intensity is `heatMarkerIntensityScoreNormalized`).
+- [x] **NOT** routed through `QuotaLedger` — Innertube is unbilled.
+- [x] Fail-open: 4xx / 5xx / network error / missing JSON path → return `None`, log INFO, count as miss in run-level `heatmap_hit_rate`.
+- [x] Per-run aggregate: if `heatmap_hit_rate < 0.70`, append a single rolled-up warning row to `logs/alerts.md` at run end (kind=`heatmap_low_hit_rate`).
+- [x] Per-clip: `selection_method='heatmap_aided'` iff window `[start_s, end_s]` overlaps any top-5 heat marker; else `'transcript_only'`.
+
+### Window slicing (`selector/windows.py`)
+- [x] **Baseline non-overlapping walk**: accumulate consecutive Whisper segments until cumulative duration ∈ [`clip_min_seconds`, `clip_max_seconds`]; emit; reset.
+- [x] **Heatmap-centered candidates**: for each top-5 heat marker, build a window centered on the marker midpoint, expand outward to nearest sentence/segment boundaries until duration ∈ [30, 60]. Skip if no boundary set yields a valid duration.
+- [x] Merge + dedup: windows whose `(start_s, end_s)` are within 1 s collapse; prefer `source="heatmap_centered"` on collision.
+- [x] Each window: `{candidate_id, start_s, end_s, text, words, heatmap_peak: bool, source: "baseline" | "heatmap_centered"}`. `candidate_id = "c{0..N}"` per video — only this is exposed to the LLM.
+- [x] Edge cases: video shorter than `clip_min_seconds` total → zero windows, video skipped.
+
+### Ranker (`selector/ranker.py`)
+- [x] `POST http://localhost:11434/api/chat`, `format: "json"`, `keep_alive: "10m"`.
+- [x] Fixed system prompt = scoring rubric (hook strength, payoff, self-contained, controversy/curiosity, no slow intro). Identical bytes per call so Ollama prefix kv-cache reuses it.
+- [x] One call per video; user message contains all candidate windows labeled by `candidate_id`.
+- [x] Schema returned: `{"clips":[{"candidate_id","hook","suggested_title","score"}, ...]}` with N = `cfg.clips_per_video`. **LLM returns IDs, never raw timestamps**; selector maps IDs back to canonical `(start_s, end_s)` locally.
+- [x] Validation: every returned `candidate_id` must exist in this video's window list and be unique. Unknown / duplicated / missing → retry once with stricter user prompt; persistent → leave at `transcribed`, alert at run end.
+- [x] Malformed JSON → retry once; persistent → leave at `transcribed`, alert at run end.
+- [x] Ollama unreachable → leave at `transcribed`, alert at run end, proceed with next video.
+- [x] `OLLAMA_HOST` env override respected (mirrors [src/bootstrap.py:153](src/bootstrap.py#L153)).
+
+### Persistence
+- [x] `clip_id = f"{video_id}_{int(start_s)}_{int(end_s)}"`.
+- [x] **New helper `repo.upsert_selector_clip(...)`** — touches only selector-owned columns: `start_s, end_s, hook, suggested_title, selection_method, status, rejection_reason, updated_at`. Does NOT clobber `publish_at_utc`, `publish_slot_local`, `output_path`, `youtube_video_id`, `title_slug` once Phases 4–6 have populated them. Verified by `tests/test_selector_upsert.py::test_rerank_preserves_downstream_columns` and `tests/test_selector_runner.py::test_force_preserves_downstream_columns`.
+- [x] Per-video transactionality:
+  1. Whisper → atomic transcript write.
+  2. `set_video_status(video_id, 'transcribed')` (own transaction).
+  3. Heatmap fetch (no DB write).
+  4. Rank + validate candidate IDs.
+  5. Inside `repo.tx()`: `upsert_selector_clip` for each chosen window, then `set_video_status(video_id, 'selected')`.
+  A crash between steps leaves the video at `lang_ok` or `transcribed`; next run resumes there.
+- [x] Phase 3 leaves `publish_at_utc`, `publish_slot_local`, `output_path`, `youtube_video_id`, `title_slug` NULL.
+
+### Reviewer spot-check
+- [x] At end of `run_all`, append a fresh template to `logs/heatmap_qa.md`: markdown header (created if missing) + up to 5 transcript-only + up to 5 heatmap-aided rows from this run, columns `clip_id | selection_method | hook | rating_1_to_5 | notes`. Skipped if no clips selected.
+
+### Tests (54 new → 128 total)
+Split across:
+- [x] `tests/test_selector_upsert.py` (4 tests) — selector-scoped upsert preserves downstream columns.
+- [x] `tests/test_selector_transcriber.py` (10 tests) — cache hit/miss matrix, atomic write, mid-stream Whisper failure leaves no temp file.
+- [x] `tests/test_selector_windows.py` (11 tests) — baseline + heatmap-centered + dedup + candidate IDs.
+- [x] `tests/test_selector_heatmap.py` (8 tests) — parser, fail-open, retry on connection error / 5xx.
+- [x] `tests/test_selector_ranker.py` (8 tests) — candidate_id validation, retry, malformed JSON, network failures.
+- [x] `tests/test_selector_runner.py` (17 tests) — full orchestration: status preflight, --force / --retranscribe semantics, atomic-transcript invariant, downstream-column preservation under --force, heatmap hit/miss + run-level alert, ranker error → status='transcribed' + alert, dry-run, empty candidate set tripwire, model load failure.
+
+### Acceptance
+- [x] `pytest tests/` — 128 passing (74 prior + 54 Phase 3).
+- [x] Re-run on a `selected` row without `--force` exits via `skipped_already_selected` with no Whisper model load (verified by `test_already_selected_no_force_skips` with `TripwireWhisperModel`).
+- [ ] **Live, post-merge:** First 10 clips manually rated, ≥ 7 "watchable hook"; transcript-only path ≥ 6/10.
+- [ ] **Live, post-merge:** `heatmap_hit_rate ≥ 70 %` on the 148-video sweep; otherwise the rolled-up alert row appears in `logs/alerts.md`.
+
+### Phase 3 live verification (run when ready)
+1. `pytest tests/` — expect 128 passing.
+2. `python -m src.selector --video-id <one Joe Rogan id>` → 1 transcript JSON written, 2 clip rows inserted, `videos.status='selected'`. Wall-clock ~2–5 min.
+3. Re-run #2 immediately → `skip: skipped_already_selected`, no Whisper load, < 2 s.
+4. `python -m src.selector --video-id <same id> --force` → re-ranks from cached transcript, no Whisper load, < 30 s. Clip rows replaced.
+5. `python -m src.selector --video-id <same id> --retranscribe` → re-pays Whisper, transcript file rewritten.
+6. Heatmap-miss simulation: temporarily set hosts entry blocking `youtube.com`, run a single video → `selection_method='transcript_only'`, no exception. Restore hosts.
+7. Full sweep: `python -m src.selector`. Expect 148 transcripts written, ~296 clip rows (148 × 2). Wall-clock ~3–5 h.
+8. `sqlite3 data/state.db "SELECT selection_method, COUNT(*) FROM clips GROUP BY selection_method;"` — expect ≥ 70% `heatmap_aided`; if not, verify the rolled-up alert row in `logs/alerts.md`.
+9. **Acceptance gate**: pick 10 random clips, open source mp4 at `(start_s, end_s)`, rate "watchable hook" 1–5. Need ≥ 7 with rating ≥ 3.
 
 ## Phase 4 — Editor / Reformat
 - [ ] `subtitles/ass_writer.py` — word-by-word ASS generator
