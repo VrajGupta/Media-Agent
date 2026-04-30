@@ -62,6 +62,11 @@ class StubConfig:
         min_height: int = 720,
         max_height: int = 1080,
         estimated_bytes: int = 524288000,
+        whisper_model: str = "large-v3",
+        whisper_device: str = "cuda",
+        whisper_compute_type: str = "int8_float16",
+        lang_detect_threshold: float = 0.7,
+        lang_detect_target_lang: str = "en",
     ):
         self.disk_soft_cap_gb = soft_cap_gb
         self.disk_hard_cap_gb = hard_cap_gb
@@ -69,6 +74,11 @@ class StubConfig:
         self.download_min_height = min_height
         self.download_max_height = max_height
         self.download_estimated_bytes_per_video = estimated_bytes
+        self.whisper_model = whisper_model
+        self.whisper_device = whisper_device
+        self.whisper_compute_type = whisper_compute_type
+        self.lang_detect_threshold = lang_detect_threshold
+        self.lang_detect_target_lang = lang_detect_target_lang
         raw = tmp_path / "raw"
         logs = tmp_path / "logs"
         raw.mkdir(parents=True, exist_ok=True)

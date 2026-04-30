@@ -26,6 +26,10 @@ whisper_compute_type: "int8_float16"                  # CTranslate2 setting
 whisper_device: "cuda"
 ollama_model: "qwen2.5:3b-instruct"
 
+# --- Language detection (Phase 2.5) ---
+lang_detect_threshold: 0.7                            # reject iff lang!=target AND confidence>=this
+lang_detect_target_lang: "en"
+
 # --- Selection ---
 clip_min_seconds: 30
 clip_max_seconds: 60

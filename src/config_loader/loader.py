@@ -50,6 +50,9 @@ class Config(BaseModel):
     whisper_device: str
     ollama_model: str
 
+    lang_detect_threshold: float = 0.7
+    lang_detect_target_lang: str = "en"
+
     clip_min_seconds: int
     clip_max_seconds: int
     clips_per_video: int

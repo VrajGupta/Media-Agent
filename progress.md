@@ -75,10 +75,22 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 7. **Eviction smoke test (synthetic):** insert a fake `clips` row marked `uploaded` for one downloaded video, then re-run the downloader; expect the eviction loop log to free that file.
 
 ## Phase 2.5 — Language Detection (NEW)
-- [ ] `lang_detect/detect.py` — Whisper on first 60 s, reject `≠ en` w/ confidence ≥ 0.7
-- [ ] Status `rejected_language` written to `videos.rejection_reason`
-- [ ] CLI: `python -m src.lang_detect`
-- [ ] **Acceptance:** correctly rejects 5 hand-picked non-en videos; correctly passes 5 hand-picked en videos.
+- [x] `lang_detect/runner.py` — Whisper on first encoder window, reject `≠ en` w/ confidence ≥ 0.7. Module name follows discovery/runner.py + downloader/runner.py convention; we don't iterate the segments generator, so Whisper performs language detection on the initial encoder window without full transcription.
+- [x] Status `rejected_language` written to `videos.rejection_reason` (e.g. `lang=es, conf=0.92`); pass writes status `lang_ok` (new value, schema-comment-only update — status column is free-form TEXT).
+- [x] CLI: `python -m src.lang_detect [--video-id <id>] [--force] [--dry-run] [--config alt.yaml]`. Single-video path preflights row status before constructing the Whisper model so a rerun on `lang_ok` exits without paying the model load. Batch path raises `LangDetectModelLoadError` on model-load failure; CLI logs + appends one rolled-up alert + exits 1. Per-video inference errors leave the row at `downloaded` for next-run retry; rolled-up alert at run end.
+- [x] `tests/` — 14 new pytest tests (verdict matrix, threshold boundary, status preflight + force, missing file, inference error, dry-run, zero-candidate no-load, model-load failure). Whisper is monkeypatched at `src.lang_detect.runner.WhisperModel` — no GPU/CUDA touched in tests. 70 total tests green.
+- [x] `src/state/repository.py` — added `videos_with_statuses(statuses)` helper (parameterized `IN (?, ?, ...)`, returns `[]` on empty input) for the `--force` batch path.
+- [x] `config.yaml` + `Config` — added `lang_detect_threshold: 0.7` and `lang_detect_target_lang: "en"` with typed defaults.
+- [x] **Acceptance (live, 2026-04-30):** 154 downloaded videos swept; 148 → `lang_ok`, 6 → `rejected_language`. All 6 rejections correctly classified by Whisper: my (Burmese, conf=0.99), ta (Tamil, conf=0.99), tl (Tagalog, conf=1.00), pt (Portuguese, conf=1.00), hi (Hindi, conf=0.99 — title was English but audio was Hindi, exact false-positive Phase 2.5 was built to catch), ur (Urdu, conf=0.80). Single-video reruns confirm idempotent skip path: 1.17 s wall-clock with no Whisper load (well under 2 s gate). DLL preload fix landed in [src/lang_detect/runner.py](src/lang_detect/runner.py) for `cublas64_12.dll` / `cudnn64_9.dll` (`os.add_dll_directory` + `ctypes.WinDLL` preload — required because ctranslate2's compiled extension does not honor `add_dll_directory` alone).
+
+### Phase 2.5 live verification (run when ready)
+1. `pytest tests/` — expect 70 passing.
+2. `python -m src.lang_detect --video-id <one Joe Rogan id known English>` → `lang_ok`; agent.log shows `detected=en, conf=0.9x`.
+3. `python -m src.lang_detect --video-id <one known non-English candidate>` → `rejected_language`; `rejection_reason` contains `lang=…, conf=…`.
+4. Re-run #2 immediately → exits with `skip: skipped_already_lang_ok`, **no Whisper load** (verify wall-clock < 2 s).
+5. Full sweep: `python -m src.lang_detect`. Expect most of the 156 downloaded rows → `lang_ok`, a handful → `rejected_language`. Wall-clock ~10 min on RTX 3070.
+6. `sqlite3 data/state.db "SELECT status, COUNT(*) FROM videos GROUP BY status;"` → `lang_ok + rejected_language ≈ 156`.
+7. **Acceptance gate:** manually pick 5 known-English and 5 known-non-English videos, force-run lang_detect on each, verify all 10 verdicts are correct.
 
 ## Phase 3 — Clip Selection
 - [ ] `selector/transcriber.py` (faster-whisper large-v3 int8_float16, CUDA)

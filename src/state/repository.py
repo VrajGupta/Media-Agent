@@ -60,6 +60,15 @@ class Repository:
     def videos_by_status(self, status: str) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM videos WHERE status=?", (status,)).fetchall()
 
+    def videos_with_statuses(self, statuses: list[str]) -> list[sqlite3.Row]:
+        if not statuses:
+            return []
+        placeholders = ",".join("?" * len(statuses))
+        return self.conn.execute(
+            f"SELECT * FROM videos WHERE status IN ({placeholders})",
+            tuple(statuses),
+        ).fetchall()
+
     def get_video(self, video_id: str) -> sqlite3.Row | None:
         return self.conn.execute(
             "SELECT * FROM videos WHERE video_id=?", (video_id,)
