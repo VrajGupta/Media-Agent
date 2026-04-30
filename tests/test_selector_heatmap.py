@@ -12,31 +12,33 @@ from src.selector import heatmap as hm
 
 
 def _fake_payload(markers: list[tuple[float, float, float]]) -> dict[str, Any]:
-    """Build a Innertube player JSON with the given (start_s, duration_s, intensity) markers."""
-    heat_markers = [
+    """Build an Innertube /next JSON with the given (start_s, duration_s, intensity) markers.
+
+    Real schema: frameworkUpdates.entityBatchUpdate.mutations[].payload
+                 .macroMarkersListEntity.markersList.markers[].{startMillis,
+                 durationMillis, intensityScoreNormalized}
+    Note: startMillis / durationMillis arrive as STRINGS in the real payload.
+    """
+    raw_markers = [
         {
-            "heatMarkerRenderer": {
-                "timeRangeStartMillis": int(s * 1000),
-                "markerDurationMillis": int(d * 1000),
-                "heatMarkerIntensityScoreNormalized": float(i),
-            }
+            "startMillis": str(int(s * 1000)),
+            "durationMillis": str(int(d * 1000)),
+            "intensityScoreNormalized": float(i),
         }
         for (s, d, i) in markers
     ]
     return {
-        "playerOverlays": {
-            "playerOverlayRenderer": {
-                "decoratedPlayerBarRenderer": {
-                    "decoratedPlayerBarRenderer": {
-                        "playerBar": {
-                            "multiMarkersPlayerBarRenderer": {
-                                "markersMap": [
-                                    {"value": {"heatmap": {"heatmapRenderer": {"heatMarkers": heat_markers}}}}
-                                ]
+        "frameworkUpdates": {
+            "entityBatchUpdate": {
+                "mutations": [
+                    {
+                        "payload": {
+                            "macroMarkersListEntity": {
+                                "markersList": {"markers": raw_markers}
                             }
                         }
                     }
-                }
+                ]
             }
         }
     }
@@ -84,16 +86,34 @@ def test_parse_extracts_markers():
 
 def test_parse_returns_empty_when_path_missing():
     assert hm.parse_heat_markers({}) == []
-    assert hm.parse_heat_markers({"playerOverlays": {}}) == []
+    assert hm.parse_heat_markers({"frameworkUpdates": {}}) == []
+    # Mutation without macroMarkersListEntity (some videos return other entity types here).
+    assert hm.parse_heat_markers({
+        "frameworkUpdates": {
+            "entityBatchUpdate": {"mutations": [{"payload": {"otherEntity": {}}}]}
+        }
+    }) == []
 
 
 def test_parse_skips_malformed_markers():
     payload = _fake_payload([(10.0, 5.0, 0.9)])
-    payload["playerOverlays"]["playerOverlayRenderer"]["decoratedPlayerBarRenderer"]["decoratedPlayerBarRenderer"]["playerBar"]["multiMarkersPlayerBarRenderer"]["markersMap"][0]["value"]["heatmap"]["heatmapRenderer"]["heatMarkers"].append(
-        {"heatMarkerRenderer": {"missing": "fields"}}
+    payload["frameworkUpdates"]["entityBatchUpdate"]["mutations"][0]["payload"]["macroMarkersListEntity"]["markersList"]["markers"].append(
+        {"missing": "fields"}
     )
     markers = hm.parse_heat_markers(payload)
     assert len(markers) == 1
+
+
+def test_parse_handles_multiple_mutations():
+    """Real /next payloads have multiple mutations; only one carries macroMarkersListEntity."""
+    payload = _fake_payload([(10.0, 5.0, 0.9)])
+    # Prepend an unrelated mutation.
+    payload["frameworkUpdates"]["entityBatchUpdate"]["mutations"].insert(
+        0, {"payload": {"unrelatedEntity": {"foo": "bar"}}}
+    )
+    markers = hm.parse_heat_markers(payload)
+    assert len(markers) == 1
+    assert markers[0].start_s == 10.0
 
 
 # ---- fetch_heatmap: success + fail-open ------------------------------------
@@ -140,6 +160,6 @@ def test_fetch_network_error_retries_then_fails_open(monkeypatch):
 
 def test_fetch_returns_empty_list_for_video_without_heatmap(monkeypatch):
     """A 200 response with no markers in the payload: returns [], not None."""
-    _patch_post(monkeypatch, [_fake_response(json_body={"playerOverlays": {}})])
+    _patch_post(monkeypatch, [_fake_response(json_body={"frameworkUpdates": {}})])
     result = hm.fetch_heatmap("v1")
     assert result == []

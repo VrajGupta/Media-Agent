@@ -109,9 +109,9 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 - [x] Fail-soft on inference error: leave row at `lang_ok`, no transcript file written, error rolled up into the run-end alert.
 
 ### Heatmap (`selector/heatmap.py`)
-- [x] `POST https://www.youtube.com/youtubei/v1/player` with hard-coded module-level constant `{"context":{"client":{"clientName":"WEB","clientVersion":"2.20240101.00.00"}},"videoId":...}`.
+- [x] `POST https://www.youtube.com/youtubei/v1/next` (the watch-page renderer; `/player` returns a stripped-down payload without heatmap data — discovered during live verification 2026-04-30 and patched). Hard-coded module-level constant: `clientName=WEB`, `clientVersion=2.20241201.00.00`, `hl=en`, `gl=US`, plus `playbackContext.contentPlaybackContext.currentUrl=/watch?v=<id>`.
 - [x] 5 s timeout. One retry on `requests.ConnectionError` or 5xx response. No fixed sleep between calls.
-- [x] Parser walks `playerOverlays...heatmapRenderer.heatMarkers[]` → list of `(start_s, duration_s, intensity)` (intensity is `heatMarkerIntensityScoreNormalized`).
+- [x] Parser walks `frameworkUpdates.entityBatchUpdate.mutations[].payload.macroMarkersListEntity.markersList.markers[]` → list of `(start_s, duration_s, intensity)`. Each marker is `{startMillis: str, durationMillis: str, intensityScoreNormalized: float}`. Multi-mutation payloads are walked in full; only mutations carrying `macroMarkersListEntity` contribute markers.
 - [x] **NOT** routed through `QuotaLedger` — Innertube is unbilled.
 - [x] Fail-open: 4xx / 5xx / network error / missing JSON path → return `None`, log INFO, count as miss in run-level `heatmap_hit_rate`.
 - [x] Per-run aggregate: if `heatmap_hit_rate < 0.70`, append a single rolled-up warning row to `logs/alerts.md` at run end (kind=`heatmap_low_hit_rate`).
@@ -149,17 +149,17 @@ Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `
 ### Reviewer spot-check
 - [x] At end of `run_all`, append a fresh template to `logs/heatmap_qa.md`: markdown header (created if missing) + up to 5 transcript-only + up to 5 heatmap-aided rows from this run, columns `clip_id | selection_method | hook | rating_1_to_5 | notes`. Skipped if no clips selected.
 
-### Tests (54 new → 128 total)
+### Tests (55 new → 129 total)
 Split across:
 - [x] `tests/test_selector_upsert.py` (4 tests) — selector-scoped upsert preserves downstream columns.
 - [x] `tests/test_selector_transcriber.py` (10 tests) — cache hit/miss matrix, atomic write, mid-stream Whisper failure leaves no temp file.
 - [x] `tests/test_selector_windows.py` (11 tests) — baseline + heatmap-centered + dedup + candidate IDs.
-- [x] `tests/test_selector_heatmap.py` (8 tests) — parser, fail-open, retry on connection error / 5xx.
+- [x] `tests/test_selector_heatmap.py` (9 tests) — `/next` endpoint, parser walks `frameworkUpdates...macroMarkersListEntity.markersList.markers[]`, multi-mutation handling, fail-open, retry on connection error / 5xx.
 - [x] `tests/test_selector_ranker.py` (8 tests) — candidate_id validation, retry, malformed JSON, network failures.
 - [x] `tests/test_selector_runner.py` (17 tests) — full orchestration: status preflight, --force / --retranscribe semantics, atomic-transcript invariant, downstream-column preservation under --force, heatmap hit/miss + run-level alert, ranker error → status='transcribed' + alert, dry-run, empty candidate set tripwire, model load failure.
 
 ### Acceptance
-- [x] `pytest tests/` — 128 passing (74 prior + 54 Phase 3).
+- [x] `pytest tests/` — 129 passing (74 prior + 55 Phase 3).
 - [x] Re-run on a `selected` row without `--force` exits via `skipped_already_selected` with no Whisper model load (verified by `test_already_selected_no_force_skips` with `TripwireWhisperModel`).
 - [ ] **Live, post-merge:** First 10 clips manually rated, ≥ 7 "watchable hook"; transcript-only path ≥ 6/10.
 - [ ] **Live, post-merge:** `heatmap_hit_rate ≥ 70 %` on the 148-video sweep; otherwise the rolled-up alert row appears in `logs/alerts.md`.
