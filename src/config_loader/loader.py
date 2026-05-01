@@ -56,6 +56,7 @@ class Config(BaseModel):
     clip_min_seconds: int
     clip_max_seconds: int
     clips_per_video: int
+    selector_max_candidates: int = 25
 
     human_review: bool
     banlist: list[str]

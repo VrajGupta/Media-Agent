@@ -34,6 +34,7 @@ lang_detect_target_lang: "en"
 clip_min_seconds: 30
 clip_max_seconds: 60
 clips_per_video: 2
+selector_max_candidates: 25                            # cap windows passed to Ollama; long videos can produce 200+ baseline windows which overwhelm qwen2.5:3b
 
 # --- Policy ---
 human_review: true                                    # locked true for first 2 weeks

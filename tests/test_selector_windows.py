@@ -7,6 +7,7 @@ from src.selector.windows import (
     Window,
     baseline_windows,
     build_windows,
+    cap_candidates,
     heatmap_centered_windows,
 )
 
@@ -119,3 +120,74 @@ def test_build_windows_zero_when_video_too_short():
     segments = [_seg(0.0, 10.0)]
     out = build_windows(segments, markers=None, min_seconds=30.0, max_seconds=60.0)
     assert out == []
+
+
+# ---- cap_candidates ---------------------------------------------------------
+
+
+def _mk_window(idx: int, source: str = "baseline", heat: bool = False) -> Window:
+    return Window(
+        candidate_id=f"c{idx}",
+        start_s=float(idx * 30),
+        end_s=float(idx * 30 + 30),
+        text=f"text {idx}",
+        words=[],
+        heatmap_peak=heat,
+        source=source,
+    )
+
+
+def test_cap_no_op_when_under_limit():
+    windows = [_mk_window(i) for i in range(10)]
+    out = cap_candidates(windows, max_count=25)
+    assert len(out) == 10
+    assert [w.candidate_id for w in out] == [f"c{i}" for i in range(10)]
+
+
+def test_cap_zero_or_negative_returns_renumbered_input():
+    windows = [_mk_window(i) for i in range(5)]
+    out = cap_candidates(windows, max_count=0)
+    assert len(out) == 5
+
+
+def test_cap_preserves_all_heatmap_centered():
+    """Even if the cap is tight, all heatmap_centered windows survive."""
+    heat_windows = [_mk_window(i, source="heatmap_centered", heat=True) for i in range(8)]
+    base_windows = [_mk_window(i + 100, source="baseline") for i in range(50)]
+    windows = heat_windows + base_windows
+    out = cap_candidates(windows, max_count=10)
+    # All 8 heatmap_centered must be in the output.
+    sources = [w.source for w in out]
+    assert sources.count("heatmap_centered") == 8
+    assert len(out) == 10  # 8 heat + 2 baseline (filling remaining slots)
+
+
+def test_cap_even_stride_baseline_when_no_heatmap():
+    """Long video, no heatmap markers — baseline gets evenly sampled."""
+    base_windows = [_mk_window(i, source="baseline") for i in range(100)]
+    out = cap_candidates(base_windows, max_count=10)
+    assert len(out) == 10
+    # Even stride means starts should span the full range.
+    starts = [w.start_s for w in out]
+    assert starts[0] == 0.0  # first
+    # Last picked is around index 90 (i=9, stride=10) — start_s = 90 * 30 = 2700
+    assert starts[-1] >= 2700.0
+
+
+def test_cap_renumbers_candidate_ids_contiguously():
+    """LLM sees c0..c{N-1} regardless of source mix."""
+    heat_windows = [_mk_window(i, source="heatmap_centered", heat=True) for i in range(3)]
+    base_windows = [_mk_window(i + 100, source="baseline") for i in range(50)]
+    windows = heat_windows + base_windows
+    out = cap_candidates(windows, max_count=10)
+    assert [w.candidate_id for w in out] == [f"c{i}" for i in range(10)]
+
+
+def test_cap_long_video_268_windows_capped_to_25():
+    """Regression: 268 windows on a 1.5h Joe Rogan video overwhelmed
+    qwen2.5:3b's effective context. Verify the exact case is now capped."""
+    base_windows = [_mk_window(i, source="baseline") for i in range(268)]
+    out = cap_candidates(base_windows, max_count=25)
+    assert len(out) == 25
+    # IDs are contiguous c0..c24.
+    assert [w.candidate_id for w in out] == [f"c{i}" for i in range(25)]

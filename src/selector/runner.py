@@ -66,7 +66,7 @@ from src.observability import append_alert  # noqa: E402
 from src.selector import heatmap as heatmap_mod  # noqa: E402
 from src.selector import ranker as ranker_mod  # noqa: E402
 from src.selector import transcriber as transcriber_mod  # noqa: E402
-from src.selector.windows import HeatMarker, build_windows  # noqa: E402
+from src.selector.windows import HeatMarker, build_windows, cap_candidates  # noqa: E402
 from src.state import Repository  # noqa: E402
 
 
@@ -208,6 +208,14 @@ def select_one_video(
         min_seconds=float(cfg.clip_min_seconds),
         max_seconds=float(cfg.clip_max_seconds),
     )
+    raw_window_count = len(windows)
+    if windows:
+        windows = cap_candidates(windows, cfg.selector_max_candidates)
+        if len(windows) < raw_window_count:
+            logger.info(
+                f"capped candidates for {video_id}: "
+                f"{raw_window_count} -> {len(windows)} (max={cfg.selector_max_candidates})"
+            )
     if not windows:
         logger.info(f"no candidate windows for {video_id} (video too short or sparse)")
         return SelectorResult(

@@ -67,6 +67,7 @@ class StubConfig:
         whisper_compute_type: str = "int8_float16",
         lang_detect_threshold: float = 0.7,
         lang_detect_target_lang: str = "en",
+        selector_max_candidates: int = 25,
     ):
         self.disk_soft_cap_gb = soft_cap_gb
         self.disk_hard_cap_gb = hard_cap_gb
@@ -79,6 +80,7 @@ class StubConfig:
         self.whisper_compute_type = whisper_compute_type
         self.lang_detect_threshold = lang_detect_threshold
         self.lang_detect_target_lang = lang_detect_target_lang
+        self.selector_max_candidates = selector_max_candidates
         raw = tmp_path / "raw"
         logs = tmp_path / "logs"
         raw.mkdir(parents=True, exist_ok=True)

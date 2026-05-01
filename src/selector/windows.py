@@ -169,6 +169,53 @@ def _overlaps_marker(start_s: float, end_s: float, markers: list[HeatMarker], to
     return False
 
 
+def cap_candidates(windows: list["Window"], max_count: int) -> list["Window"]:
+    """Cap the candidate set sent to the LLM. Long videos produce 200+ baseline
+    windows which exceed qwen2.5:3b's effective in-context reasoning budget and
+    cause it to return malformed output (observed: candidate_id=null).
+
+    Strategy:
+      1. Keep all heatmap_centered windows (always — strong signal, usually <=5).
+      2. Fill remaining slots from baseline windows via even-stride sampling so
+         coverage remains uniform across the video.
+      3. Re-assign candidate_ids c0..cN-1 in start-time order so the LLM still
+         sees a contiguous ID space.
+    """
+    if max_count <= 0 or len(windows) <= max_count:
+        return [_renumber(w, i) for i, w in enumerate(windows)]
+
+    heat = [w for w in windows if w.source == "heatmap_centered"]
+    base = [w for w in windows if w.source == "baseline"]
+
+    keep = list(heat)
+    remaining = max_count - len(keep)
+    if remaining > 0 and base:
+        if remaining >= len(base):
+            keep.extend(base)
+        else:
+            stride = len(base) / remaining
+            picked: list[Window] = []
+            for i in range(remaining):
+                idx = int(i * stride)
+                picked.append(base[min(idx, len(base) - 1)])
+            keep.extend(picked)
+
+    keep.sort(key=lambda w: (w.start_s, w.end_s))
+    return [_renumber(w, i) for i, w in enumerate(keep)]
+
+
+def _renumber(w: "Window", idx: int) -> "Window":
+    return Window(
+        candidate_id=f"c{idx}",
+        start_s=w.start_s,
+        end_s=w.end_s,
+        text=w.text,
+        words=w.words,
+        heatmap_peak=w.heatmap_peak,
+        source=w.source,
+    )
+
+
 def build_windows(
     segments: list[dict],
     markers: Optional[list[HeatMarker]],
