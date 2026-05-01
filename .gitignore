@@ -27,3 +27,5 @@ logs/heatmap_qa.md
 Thumbs.db
 .vscode/
 .idea/
+
+.claude/scheduled_tasks.lock

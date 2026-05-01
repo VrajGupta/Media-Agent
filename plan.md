@@ -163,12 +163,188 @@ python -m src.selector --config alt.yaml
 - Re-run on a `selected` video without `--force` exits in < 2 s with no Whisper load.
 
 ## Phase 4 — Vertical Reformat & Subtitles (Day 5–7)
-- Cut source clip with ffmpeg (`-ss`/`-to`, copy-codec when possible, re-encode otherwise).
-- Build 1080×1920 canvas:
-  - Top half (0–960): source clip, **center-cropped** to 1080×960 (subject tracking deferred to Phase 8).
-  - Bottom half (960–1920): background gameplay, sequentially seeked from the rotation pool (see gameplay rotation rule).
-- Re-encode with `h264_nvenc` (RTX 3070) for ~5× faster renders than libx264.
-- **Acceptance:** valid 1080×1920 H.264, ≤60 s, audio at -14 ±0.5 LUFS, subtitle drift ≤50 ms.
+> Phase 3 ends at `clips.status='selected'` with `(start_s, end_s, hook, suggested_title, selection_method)` populated and a cached transcript at `data/transcripts/{video_id}.json`. Phase 4 turns each selected clip into a 1080×1920 H.264 mp4 in `output/pending/`: split-screen with the source video on top (center-cropped) and a looping background gameplay clip on the bottom, karaoke-style word-by-word ASS subtitles burned in, audio loudnorm'd to -14 LUFS, encoded with `h264_nvenc` on the RTX 3070 — single ffmpeg pass per clip.
+
+### Status flow
+`selected → rendered`
+
+New status value: `rejected_render` for irrecoverable source/probe failures (source mp4 missing or unreadable). `clips.status` column is free-form TEXT (schema-comment-only update, no migration).
+
+Phase 4 fills only `title_slug`, `output_path`, `status` on success. Leaves `publish_at_utc`, `publish_slot_local`, `youtube_video_id` NULL — those belong to Phases 5/6.
+
+### Module layout (mirrors `selector/`)
+```
+src/subtitles/
+  __init__.py        re-exports
+  ass_writer.py      Whisper words → .ass karaoke (clip-relative timing)
+src/editor/
+  __init__.py        re-exports
+  __main__.py        CLI: --clip-id, --force, --dry-run, --config
+  runner.py          orchestrator: render_one_clip, run_all
+  ffmpeg_runner.py   filtergraph builder + subprocess.run wrapper
+  gameplay.py        round-robin file picker + cursor read/advance
+  slug.py            suggested_title → filesystem-safe slug (≤80 chars)
+```
+`subtitles/` is its own package per `agents.md` §5. Raw subprocess (no `ffmpeg-python`) per the existing pattern in `src/downloader/ytdlp_runner.py`'s `_ffprobe_height` (`subprocess.check_output`, list-of-args, never a shell string).
+
+### Subtitle generation (`subtitles/ass_writer.py`)
+
+#### Chunking — non-overlapping karaoke chunks
+One Dialogue line per **non-overlapping chunk of 1–2 words**. Each line's `End` time is exactly the next line's `Start` time so libass renders one chunk at a time with no overlap. The active word inside each chunk is highlighted via `\k` karaoke tags so the highlight sweeps across the chunk while it's on screen. Chunk size = 2 words by default; falls back to 1 word for very fast speech (>4 wps sustained) or for a final orphan word.
+
+#### Clip-relative timing
+Whisper word timestamps in the cached JSON are full-video seconds. The ASS file must be clip-relative: subtract `clip.start_s` from every word's start/end so the file timeline begins at 0. Only words intersecting `[clip.start_s, clip.end_s]` are included; words straddling the boundary are clipped to the boundary.
+
+#### `\k` centisecond rounding with drift correction
+`\k` durations are integer centiseconds. Naive rounding accumulates error. Use carry-the-remainder: track `accumulated_real_cs - accumulated_emitted_cs`; when the residual exceeds 1 cs, add it to the next word. Acceptance: cumulative drift ≤ 50 ms over a 60 s clip (verifiable in tests with synthetic word streams).
+
+#### Style
+Per `agents.md` §5: Impact font ~120 pt, white fill, 8 px black border, yellow active-word highlight via `\1c&H0000FFFF&` override, `Alignment 5` + `\pos(540, 1340)` for center-anchored placement ~70% down a 1920-tall canvas.
+
+#### Special-character escaping
+ASS dialogue text escape (separate concern from ffmpeg filter-path escape):
+- `\` → `\\`
+- `{` → `\{`
+- `}` → `\}`
+- newlines normalized to a single space
+- apostrophes are NOT escaped — that's an ffmpeg filter-path concern, not a libass dialogue concern.
+
+### ffmpeg invocation (`editor/ffmpeg_runner.py`)
+
+#### Filtergraph (single pass)
+```
+[0:v] scale=1080:960:force_original_aspect_ratio=increase,
+       crop=1080:960
+       → [top]
+
+[1:v] scale=1080:960:force_original_aspect_ratio=increase,
+       crop=1080:960
+       → [bot]
+
+[top][bot] vstack=inputs=2,fps=30 → [v]
+
+[v] ass='<escaped_path>' → [vsub]
+
+[0:a] loudnorm=I=-14:LRA=11:TP=-1.0,aresample=48000 → [a]
+```
+`force_original_aspect_ratio=increase` + `crop` guarantees both pane dimensions are met or exceeded (no under-fill on non-16:9 inputs). Identical chain on both panes — no preliminary aspect-strip crop.
+
+#### Seeking via command args, not in the filtergraph
+`-ss` and `-t` go on the input declarations BEFORE each `-i`, never inside `crop`/`scale`. Built as `list[str]` and passed to `subprocess.run(shell=False)`. Never concatenated into a shell string.
+
+```
+ffmpeg -y
+  -ss <clip.start_s>     -t <duration> -i "<raw_mp4_path>"
+  -ss <gameplay_offset>  -t <duration> -i "<gameplay_path>"
+  -filter_complex "<filtergraph>"
+  -map "[vsub]" -map "[a]"
+  -c:v h264_nvenc -preset p5 -cq 23
+  -c:a aac -b:a 128k -movflags +faststart
+  "<output_path.tmp.mp4>"
+```
+
+#### Subtitle filter syntax
+Use `ass=<escaped_path>` (the dedicated libass filter), NOT `subtitles=`. Windows path escaping for the libass filter argument:
+- `\` → `\\`
+- `:` (drive letter) → `\:`
+- `,` → `\,`
+- `'` → `\\\''`
+- whole argument wrapped in single quotes inside the filter string
+
+`escape_ass_filter_path` is its own function with its own unit test (Windows-style absolute path round-tripping; output starts with `'C\:\\Users\\...`).
+
+#### Loudnorm strategy
+One-pass `loudnorm=I=-14:LRA=11:TP=-1.0,aresample=48000` per `config.yaml`. Acceptance target -14 ±0.5 LUFS is best-effort with one-pass. Phase 4 does NOT verify after render; Phase 4.5 (quality_screen) is the right place to add an `ffmpeg -af loudnorm=print_format=json` post-check.
+
+#### NVENC settings
+`-preset p5 -cq 23` per `config.yaml`. Hardware encoder verified by `src/bootstrap.py check_ffmpeg`.
+
+### Gameplay rotation (`editor/gameplay.py`)
+
+`gameplay_cursor` and `gameplay_pointer` already exist in `schema.sql`.
+
+#### Read-then-write split — never hold a transaction during ffmpeg
+Rendering is the slow part (~5–15 s with NVENC). Long write transactions block every other repository operation. Per clip:
+1. **Reserve (read-only)**: `SELECT next_index FROM gameplay_pointer`; pick file from `cfg.gameplay_pool`; `SELECT last_offset_s, file_duration_s FROM gameplay_cursor WHERE file_name=?`; compute `(file, offset)`. No DB writes yet.
+2. **Render (no transaction)**: invoke ffmpeg with the captured `(file, offset)`. Atomic write to `<output_path>.tmp.mp4`, then `os.replace()`.
+3. **Commit (one short tx)**: only on render success — advance `gameplay_pointer.next_index`, advance `gameplay_cursor.last_offset_s` by `clip_duration` (wrap to 0 if `last_offset_s + clip_duration + 1 s safety > file_duration_s`), set `gameplay_cursor.last_used_at`, then `repo.set_clip_status(clip_id, 'rendered', output_path=..., title_slug=...)`. All inside one `repo.tx()`.
+
+If render fails, the cursor was never advanced, so the next clip retries with the same `(file, offset)`. No double-consumption, no orphaned advancement.
+
+#### `file_duration_s` caching
+Probed once per file via `ffprobe -v error -show_entries format=duration -of csv=p=0 <path>` and cached in `gameplay_cursor.file_duration_s` on first commit. Pattern matches the existing `_ffprobe_height` in `src/downloader/ytdlp_runner.py`.
+
+#### Concurrency
+Phase 4 runs single-threaded inside `weekly_run`, so the simpler short-transaction approach is sufficient. If parallel rendering is added later, introduce a `rendering` status as a soft lock or use SQLite's `BEGIN IMMEDIATE` for the reservation step.
+
+### Filename strategy
+Phase 4 renders to:
+```
+output/pending/__unscheduled__{clip_id}__{title_slug}.mp4
+```
+The `__unscheduled__` prefix is the explicit signal that the file is awaiting `slot_planner`. Phase 6 renames once, in place, to:
+```
+output/pending/{YYYY-MM-DD}__slot_{HHMM}__{title_slug}.mp4
+```
+Phase 4 stores the unscheduled path in `clips.output_path` immediately. Phase 6 updates `output_path` to the renamed path in the same transaction as the rename.
+
+`title_slug` derivation (`editor/slug.py`): lowercase, replace runs of non-`[a-z0-9]` with `_`, collapse repeats, trim leading/trailing `_`, truncate at a word boundary to ≤80 chars minus a 4-char `sha1(clip_id)[:4]` suffix. Suffix guarantees no collision between clips that share a normalized title; suffix is stable across reruns.
+
+### Idempotency (3 layers)
+1. **Status preflight** — clip at `status='rendered'` skips entirely (unless `--force`); `selected` proceeds.
+2. **`--force` is gated** — only re-renders if `status='rendered'` AND `publish_at_utc IS NULL` AND `youtube_video_id IS NULL`. Scheduled or uploaded clips return `skipped_locked` so a stray `--force` cannot stomp downstream Phase 5/6 state.
+3. **Atomic file write** — render to `<output>.tmp.mp4`, `os.replace()` only on ffmpeg exit code 0 + size > 0. ffmpeg failure / 0-byte output unlinks tmp, leaves clip at `selected`. Status flips to `rejected_render` only for irrecoverable problems (source mp4 missing or ffprobe reports unreadable).
+
+### Per-clip flow
+1. Read clip row + `video_id` + raw mp4 path + transcript JSON.
+2. Validate: source mp4 exists; transcript JSON exists.
+   - Missing source → `rejected_render`, skip.
+   - Missing transcript → `error_no_transcript` (rolled-up alert), skip; next run re-transcribes.
+3. Compute `title_slug` + unscheduled `output_path`.
+4. Reserve gameplay (read-only).
+5. Generate clip-relative ASS file in temp location.
+6. Build ffmpeg argv list (raw mp4, gameplay file, ass path, output tmp).
+7. `subprocess.run(argv, shell=False, check=False, capture_output=True)`.
+8. On exit code 0 + tmp file > 0 bytes: `os.replace(tmp, final)`; inside `repo.tx()`: advance gameplay state and `set_clip_status('rendered', output_path=..., title_slug=...)`.
+9. On failure: unlink tmp, leave clip at `selected`, append to run-end alert rollup.
+
+### CLI semantics (mirrors lang_detect / selector)
+```
+python -m src.editor                             # all clips at status='selected'
+python -m src.editor --clip-id <id>              # single clip
+python -m src.editor --force                     # re-render unscheduled rendered clips (gated)
+python -m src.editor --dry-run                   # build filtergraph + ASS, print argv, no ffmpeg / DB writes
+python -m src.editor --config alt.yaml
+```
+Exit codes: 0 = ok, 1 = config/db missing, 2 = clip-id not found.
+
+### Repository helpers added
+- `read_gameplay_pointer() → int` — returns `next_index`, defaults to 0.
+- `read_gameplay_cursor(file_name) → (last_offset_s, file_duration_s)` — returns `(0.0, None)` if no row.
+- `advance_gameplay_state(*, file_name, new_offset_s, file_duration_s, new_pointer_index)` — multi-statement, transaction-bare; caller wraps in `repo.tx()`.
+- `set_clip_status(...)` already accepts `**extra` — Phase 4 calls `set_clip_status(clip_id, 'rendered', output_path=..., title_slug=...)` with no new helper needed.
+
+### Tests (47 new → 182 total)
+- `tests/test_subtitles_ass.py` (10) — single word, non-overlapping chunks (`line.End == next.Start` exactly), fast-speech fallback to 1-word, drift ≤50 ms over 60 s synthetic, words clipped to clip window, escape `\ { }` but NOT apostrophe, empty words → header only, `Alignment 5` in style.
+- `tests/test_editor_slug.py` (7) — short title, special chars, truncation at word boundary, distinct hash suffixes for distinct `clip_id`s, stable suffix on rerun, empty/garbage-only fallback to `untitled`.
+- `tests/test_editor_ffmpeg.py` (9) — Windows path escape, posix path escape, comma+apostrophe escape, filtergraph contents, regression on `crop=in_w:in_h*9/16` (must NOT appear), top/bot chains identical, argv is list, `-ss` before each `-i` and never inside filtergraph, NVENC settings present.
+- `tests/test_editor_gameplay.py` (8) — round-robin 0→1→2→0, cursor advance, wrap at near-end, ffprobe called once per file, render failure does not advance, empty pool / missing file / unprobeable file → None.
+- `tests/test_editor_runner.py` (13) — render success flips status + advances gameplay, status preflight matrix, `--force` re-renders unscheduled / blocked for scheduled / uploaded, source missing → `rejected_render`, missing transcript → `error_no_transcript`, ffmpeg failure leaves `selected` and gameplay unadvanced, 0-byte output treated as failure, dry-run no subprocess + no DB writes + argv printed, `run_all` filters out non-`selected`.
+
+### Acceptance
+- `pytest tests/` — 182 passing (135 prior + 47 Phase 4).
+- Live single-clip render produces a 1080×1920 H.264 mp4; `ffprobe` verifies `codec_name=h264, width=1080, height=1920, r_frame_rate=30/1`, duration within 0.1 s of `(end_s - start_s)`.
+- Idempotent skip: re-running `--clip-id <id>` exits in <2 s with `skipped_already_rendered`, no ffmpeg invocation.
+- Dry-run prints filtergraph + argv with libass `ass=` argument correctly escaped; no subprocess / file / DB writes.
+- Audio integrated loudness within ±0.5 of -14 LUFS (verify via `ffmpeg -af loudnorm=print_format=json` after a few real renders).
+- Visual QA on 3 random rendered clips: top half source video centered, bottom half gameplay, subtitles word-by-word with no overlap and ≤50 ms drift.
+
+### Out of scope for Phase 4 (deferred)
+- Two-pass loudnorm — only if Phase 4.5 quality_screen rejects too many on the ±0.5 LUFS gate.
+- Subject tracking / face crop — `agents.md` §4 explicitly defers to Phase 8.
+- Parallel rendering — single-threaded for v1.
+- Slot-aware filename emission — Phase 6 owns the rename.
+- Policy gate (banlist / profanity / NSFW / hook-sanity) — Phase 4.5. Phase 4 will render `selected` clips directly until Phase 4.5 lands, after which the orchestrator must guarantee `rejected_policy` clips never reach Phase 4.
 
 ## Phase 4.5 — Policy Gate + Quality Screen (Day 7)
 - `policy_gate` (runs after select, again before upload):
@@ -181,11 +357,9 @@ python -m src.selector --config alt.yaml
   - mean Whisper word-confidence ≥ 0.6.
   - Perceptual hash (pHash on 5 evenly-spaced frames) + audio fingerprint compared against `dup_hashes` (last 90 days). Reject if either matches.
   - Final clip duration ∈ [25, 65] s.
+  - Post-render loudness check: `ffmpeg -af loudnorm=print_format=json -f null -` parses `input_i`; reject if outside -14 ±0.5 LUFS.
 - All rejections write `clips.rejection_reason`. Rejected clips are not rendered or uploaded.
 - **Acceptance:** all banned-topic test inputs caught; legitimate test set passes; zero false-positive duplicate matches on 20 hand-picked distinct clips.
-- Burn karaoke-style word-by-word subtitles via ASS subtitle file generated from Whisper word timestamps.
-- Loudness normalize audio to -14 LUFS (YouTube target).
-- Output filename: `output/pending/{YYYY-MM-DD}__{slot_HHMM}__{title_slug}.mp4` (date in canonical TZ Asia/Singapore; slug from suggested title, ≤80 chars). Self-describing for manual review.
 
 ## Phase 5 — Uploader (Day 7–8)
 - `youtube.videos.insert` with resumable upload.

@@ -176,13 +176,72 @@ Split across:
 9. **Acceptance gate**: pick 10 random clips, open source mp4 at `(start_s, end_s)`, rate "watchable hook" 1–5. Need ≥ 7 with rating ≥ 3.
 
 ## Phase 4 — Editor / Reformat
-- [ ] `subtitles/ass_writer.py` — word-by-word ASS generator
-- [ ] Karaoke styling tuned (font, size, stroke, position)
-- [ ] `editor/render.py` — single-pass ffmpeg filtergraph (cut + center-crop top + gameplay vstack + ASS burn + loudnorm + h264_nvenc)
-- [ ] Gameplay rotation: round-robin file picker + cursor advance/wrap in `gameplay_cursor`
-- [ ] Output to `output/pending/{YYYY-MM-DD}__{slot_HHMM}__{title_slug}.mp4`
-- [ ] CLI: `python -m src.editor`
-- [ ] **Acceptance:** valid 1080×1920 H.264, ≤60 s, audio at -14 ±0.5 LUFS, subtitle drift ≤50 ms; visual QA on 3 clips.
+> Status flow: `selected → rendered`. New status value `rejected_render` for irrecoverable source/probe failures. Output file lives at `output/pending/__unscheduled__{clip_id}__{title_slug}.mp4`; Phase 6 (slot_planner) will rename in place once `publish_at_utc` is assigned.
+
+### Module skeleton
+- [x] `src/subtitles/__init__.py` + `src/subtitles/ass_writer.py` — Whisper words → ASS karaoke (clip-relative timing, drift correction, non-overlapping 1–2 word chunks).
+- [x] `src/editor/__init__.py` + `src/editor/__main__.py` — CLI: `--clip-id`, `--force` (gated against scheduled/uploaded), `--retranscribe` not applicable, `--dry-run`, `--config`.
+- [x] `src/editor/runner.py` — `render_one_clip`, `run_all`, `EditorOutcome` enum.
+- [x] `src/editor/ffmpeg_runner.py` — argv builder + filtergraph builder + Windows-aware ASS filter-path escape.
+- [x] `src/editor/gameplay.py` — `reserve_next_segment` / `commit_advance` (read-then-write split so ffmpeg never holds a transaction).
+- [x] `src/editor/slug.py` — title → filesystem slug with deterministic 4-char hash suffix from `clip_id`.
+
+### Subtitles (`subtitles/ass_writer.py`)
+- [x] Non-overlapping 1–2 word chunks (no sliding pair). Line *n* `End` == Line *n+1* `Start` exactly.
+- [x] Clip-relative timing: subtract `clip.start_s` from every word; clip boundaries to `[0, end-start]`.
+- [x] `\k` centisecond rounding with carry-the-remainder drift correction (≤50 ms over 60 s).
+- [x] Fast-speech fallback (>4 wps) drops to 1-word chunks.
+- [x] ASS dialogue escape: `\ { }` only. Apostrophe NOT escaped (handled by ffmpeg filter-path escape, separate concern).
+- [x] Style: Impact 120 pt, white fill, 8 px black border, yellow active-word highlight via `\1c&H0000FFFF&` override, `Alignment 5` + `\pos(540, 1340)` for center-anchored placement ~70% down a 1920-tall canvas.
+
+### ffmpeg invocation (`editor/ffmpeg_runner.py`)
+- [x] Filtergraph: identical scale-fill + center-crop chain on both panes (`scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960`). No preliminary aspect-strip crop.
+- [x] `vstack=inputs=2,fps=30` for the 1080×1920 stack.
+- [x] `ass=<escaped_path>` filter (the dedicated libass filter, not `subtitles=`).
+- [x] One-pass `loudnorm=I=-14:LRA=11:TP=-1.0,aresample=48000` on source audio only (gameplay muted).
+- [x] `-c:v h264_nvenc -preset p5 -cq 23 -c:a aac -b:a 128k -movflags +faststart`.
+- [x] `-ss` / `-t` are command args BEFORE each `-i`, never inside the filtergraph.
+- [x] argv built as `list[str]`, passed to `subprocess.run(shell=False)`. Never a shell string.
+- [x] `escape_ass_filter_path`: doubles `\`, escapes `:` `,` `'`, wraps in single quotes (Windows-aware).
+- [x] `ffprobe_duration_seconds(path)` mirrors the pattern from [src/downloader/ytdlp_runner.py](src/downloader/ytdlp_runner.py)`._ffprobe_height`.
+
+### Gameplay rotation (`editor/gameplay.py`)
+- [x] Read-then-write split: `reserve_next_segment` is read-only and returns the chosen `(file, offset)` without writing. `commit_advance` runs only after render success and is wrapped by the caller in `repo.tx()` together with `set_clip_status('rendered', ...)` — atomic.
+- [x] Round-robin via `gameplay_pointer.next_index`; cursor advance via `gameplay_cursor.last_offset_s`.
+- [x] Cursor wraps to 0 when `last_offset_s + clip_duration + 1 s safety > file_duration_s`.
+- [x] `file_duration_s` probed via ffprobe once per file, cached in `gameplay_cursor` on first commit.
+- [x] Render failure leaves pointer + cursor untouched (no double-consumption).
+
+### Filename strategy
+- [x] `output/pending/__unscheduled__{clip_id}__{title_slug}.mp4` — explicit signal that Phase 6 hasn't scheduled this clip yet.
+- [x] Phase 4 stores the unscheduled path in `clips.output_path`. Phase 6 will rename in place to `{YYYY-MM-DD}__slot_{HHMM}__{title_slug}.mp4` and update `output_path` in the same transaction.
+- [x] `slug.py`: lowercase, replace non-alphanum runs with `_`, truncate at word boundary to 80 chars minus a 4-char `sha1(clip_id)[:4]` suffix. Suffix guarantees no collision between clips that share a normalized title; suffix is stable across reruns.
+
+### Idempotency (3 layers)
+- [x] Status preflight: `rendered` skips (unless `--force`); `selected` proceeds.
+- [x] `--force` is gated: only re-renders if `status='rendered'` AND `publish_at_utc IS NULL` AND `youtube_video_id IS NULL`. Scheduled or uploaded clips return `skipped_locked`.
+- [x] Atomic file write: render to `<output>.tmp.mp4`, `os.replace()` only on ffmpeg exit code 0 + size > 0. ffmpeg failure / 0-byte output unlinks tmp, leaves clip at `selected`.
+
+### Persistence
+- [x] `set_clip_status(clip_id, 'rendered', output_path=..., title_slug=...)` reuses the existing `**extra` mechanism (no new DAL method needed). Inside the post-render transaction together with `gameplay.commit_advance`.
+- [x] Three new repository helpers: `read_gameplay_pointer`, `read_gameplay_cursor`, `advance_gameplay_state` (multi-statement, transaction-bare; caller wraps in `repo.tx()`).
+- [x] Schema comment update: `clips.status` enum extended with `rejected_render`.
+
+### Tests (47 new → 182 total)
+- [x] `tests/test_editor_slug.py` (7) — short title, special chars, truncation at word boundary, distinct hash suffixes for distinct clip_ids, stable suffix on rerun, empty/garbage-only fallback to `untitled`.
+- [x] `tests/test_subtitles_ass.py` (10) — single word, non-overlapping chunks (line.End == next.Start exactly), fast-speech fallback to 1-word, drift ≤50 ms over 60 s synthetic, words clipped to clip window, escape `\ { }` but NOT apostrophe, empty words → header only, Alignment 5 in style.
+- [x] `tests/test_editor_ffmpeg.py` (9) — Windows path escape, posix path escape, comma+apostrophe escape, filtergraph contents, regression on `crop=in_w:in_h*9/16` (must NOT appear), top/bot chains identical, argv is list, `-ss` before each `-i` and never inside filtergraph, NVENC settings present.
+- [x] `tests/test_editor_gameplay.py` (8) — round-robin 0→1→2→0, cursor advance, wrap at near-end, ffprobe called once per file, render failure does not advance, empty pool → None, missing file → None, unprobeable file → None.
+- [x] `tests/test_editor_runner.py` (13) — render success flips status + advances gameplay, status preflight matrix, `--force` re-renders unscheduled, `--force` blocked for scheduled / uploaded, source missing → `rejected_render`, missing transcript → `error_no_transcript` and unchanged status, ffmpeg failure leaves `selected` and gameplay unadvanced, 0-byte output treated as failure, dry-run no subprocess + no DB writes + argv printed, `run_all` filters out non-`selected`, `run_all` empty returns empty.
+
+### Acceptance
+- [x] `pytest tests/` — 182 passing (135 prior + 47 Phase 4).
+- [x] **Live single-clip render** on `WHibDIQHeaY_31_65` (33.6 s clip): produced a 1080×1920 H.264 39.5 MB mp4 in 23.7 s wall-clock with NVENC. ffprobe verified `codec_name=h264, width=1080, height=1920, r_frame_rate=30/1`, duration 33.60 s (within 0.1 s of `end_s - start_s = 33.58 s`).
+- [x] **Idempotent skip**: re-running `--clip-id WHibDIQHeaY_31_65` exits in 1.1 s with `skipped_already_rendered`, no ffmpeg invocation.
+- [x] **Dry-run**: prints filtergraph + argv, with the libass `ass=` argument correctly escaped for the Windows ASS path (`'C\:\\Users\\cryptix\\AppData\\Local\\Temp\\...\\WHibDIQHeaY_31_65.ass'`). No subprocess, no file written, no DB write.
+- [ ] **Live, post-merge:** Audio integrated loudness within ±0.5 of -14 LUFS (verify via `ffmpeg -af loudnorm=print_format=json` after a few real renders).
+- [ ] **Live, post-merge:** Visual QA on 3 random rendered clips: top half source video centered, bottom half gameplay, subtitles word-by-word with no overlap and ≤50 ms drift.
+- [ ] **Live, post-merge:** Full editor sweep across all `selected` clips after the Phase 3 sweep finishes.
 
 ## Phase 4.5 — Policy Gate + Quality Screen (NEW)
 - [ ] `policy_gate/banlist.py` — substring match on transcript + suggested title

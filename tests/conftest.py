@@ -47,10 +47,13 @@ class StubConfig:
     """
 
     class _Paths:
-        def __init__(self, raw_dir: str, logs_dir: str, state_db: str):
+        def __init__(self, raw_dir: str, logs_dir: str, state_db: str,
+                     transcripts_dir: str = "", pending_dir: str = ""):
             self.raw_dir = raw_dir
             self.logs_dir = logs_dir
             self.state_db = state_db
+            self.transcripts_dir = transcripts_dir
+            self.pending_dir = pending_dir
 
     def __init__(
         self,
@@ -68,6 +71,10 @@ class StubConfig:
         lang_detect_threshold: float = 0.7,
         lang_detect_target_lang: str = "en",
         selector_max_candidates: int = 25,
+        nvenc_preset: str = "p5",
+        nvenc_cq: int = 23,
+        loudness_target_lufs: float = -14.0,
+        gameplay_pool: list[str] | None = None,
     ):
         self.disk_soft_cap_gb = soft_cap_gb
         self.disk_hard_cap_gb = hard_cap_gb
@@ -81,11 +88,23 @@ class StubConfig:
         self.lang_detect_threshold = lang_detect_threshold
         self.lang_detect_target_lang = lang_detect_target_lang
         self.selector_max_candidates = selector_max_candidates
+        self.nvenc_preset = nvenc_preset
+        self.nvenc_cq = nvenc_cq
+        self.loudness_target_lufs = loudness_target_lufs
+        self.gameplay_pool = gameplay_pool if gameplay_pool is not None else []
+        from pathlib import Path
+        self.project_root = Path(tmp_path)
         raw = tmp_path / "raw"
         logs = tmp_path / "logs"
-        raw.mkdir(parents=True, exist_ok=True)
-        logs.mkdir(parents=True, exist_ok=True)
-        self.paths = self._Paths(str(raw), str(logs), str(tmp_path / "state.db"))
+        transcripts = tmp_path / "transcripts"
+        pending = tmp_path / "output" / "pending"
+        for d in (raw, logs, transcripts, pending):
+            d.mkdir(parents=True, exist_ok=True)
+        self.paths = self._Paths(
+            str(raw), str(logs), str(tmp_path / "state.db"),
+            transcripts_dir=str(transcripts),
+            pending_dir=str(pending),
+        )
 
     def abs_path(self, rel: str):
         from pathlib import Path

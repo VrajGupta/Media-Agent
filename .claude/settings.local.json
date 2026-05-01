@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "PowerShell(& 'C:\\\\Users\\\\cryptix\\\\AppData\\\\Local\\\\Programs\\\\Ollama\\\\ollama.exe' pull qwen2.5:3b-instruct)",
-      "PowerShell($env:Path = [Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [Environment]::GetEnvironmentVariable\\('Path','User'\\); git fetch origin; '---remote main contents---'; git ls-tree -r origin/main --name-only; '---remote log---'; git log origin/main --oneline -10)"
+      "PowerShell($env:Path = [Environment]::GetEnvironmentVariable\\('Path','Machine'\\) + ';' + [Environment]::GetEnvironmentVariable\\('Path','User'\\); git fetch origin; '---remote main contents---'; git ls-tree -r origin/main --name-only; '---remote log---'; git log origin/main --oneline -10)",
+      "Bash(.venv/Scripts/python.exe -m src.bootstrap --init-db)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(c:/Users/cryptix/Documents/Media-Agent-main/.venv/Scripts/python.exe -c \"import sqlite3; conn=sqlite3.connect\\('data/state.db'\\); conn.row_factory=sqlite3.Row; rows=conn.execute\\(\\\\\"SELECT video_id, title FROM videos WHERE status='downloaded' ORDER BY virality_score DESC LIMIT 5\\\\\"\\).fetchall\\(\\); [print\\(r['video_id'], '|', r['title'][:60]\\) for r in rows]\")",
+      "Bash(.venv/Scripts/python -m pytest tests/test_selector_upsert.py -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/test_selector_heatmap.py -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/test_selector_ranker.py -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/test_selector_runner.py -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/)"
     ]
   }
 }
