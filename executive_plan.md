@@ -155,7 +155,7 @@ Threshold: `virality_score ≥ 1.0` to enter selection. M_n is rolling 30-day me
 *(see `skills.md` for full table)*. v1.2 stack: yt-dlp · faster-whisper (CUDA) · ffmpeg+NVENC · **Ollama qwen2.5:3b-instruct** (replaces Anthropic) · imagehash · chromaprint/acoustid-tools · better-profanity · loguru · tenacity · zoneinfo · sqlite3 · google-api-python-client.
 
 ## 8. Hardware (locked)
-Windows 11 PC: i9-11900H · 32 GB DDR4 · 1 TB SSD · RTX 3070 laptop GPU (8 GB VRAM). Code developed on a Mac, transferred to the PC.
+Windows 11 PC: i9-11900H · 32 GB DDR4 · 1 TB SSD · RTX 3070 laptop GPU (8 GB VRAM). Code is developed and run on the same Windows laptop — single machine.
 
 ## 9. Cost Model
 | Line item | Per clip | Per week (28) |

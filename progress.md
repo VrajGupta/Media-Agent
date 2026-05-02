@@ -2,6 +2,8 @@
 
 Update immediately when a task is finished. `[x]` = done, `[~]` = in progress, `[ ]` = not started. Each phase has an **acceptance gate** at the end — do not advance until it passes.
 
+> **Dev environment:** code is developed AND run on the user's Windows laptop (i9-11900H + RTX 3070, single machine). Earlier docs implied a Mac dev host with code transfer to the PC — that's stale; the project moved to Windows-only development. Live verification commands run directly here, no sync step.
+
 ## Phase 0 — Environment & Credentials
 - [x] Confirm PC specs — i9-11900H / 32 GB / 1 TB SSD / RTX 3070 laptop GPU
 - [x] Decide initial keyword list — Joe Rogan, stoicism, NBA highlights
@@ -243,19 +245,91 @@ Split across:
 - [ ] **Live, post-merge:** Visual QA on 3 random rendered clips: top half source video centered, bottom half gameplay, subtitles word-by-word with no overlap and ≤50 ms drift.
 - [ ] **Live, post-merge:** Full editor sweep across all `selected` clips after the Phase 3 sweep finishes.
 
-## Phase 4.5 — Policy Gate + Quality Screen (NEW)
-- [ ] `policy_gate/banlist.py` — substring match on transcript + suggested title
-- [ ] `policy_gate/profanity.py` — `better-profanity` baseline scoring
-- [ ] `policy_gate/nsfw.py` — Ollama zero-shot transcript classifier
-- [ ] `policy_gate/hook_sanity.py` — Ollama "does title accurately summarize clip?" rater (reject < 3/5)
-- [ ] `quality_screen/density.py` — speech_density ≥ 1.5 words/sec
-- [ ] `quality_screen/confidence.py` — mean Whisper word-conf ≥ 0.6
-- [ ] `quality_screen/dedup.py` — `imagehash` pHash on 5 frames + audio fingerprint via `chromaprint`/`acoustid-tools`; compare to `dup_hashes` last-90-day window
-- [ ] `quality_screen/duration.py` — final clip ∈ [25, 65] s
-- [ ] `policy_gate` runs twice (post-select + pre-upload)
-- [ ] `human_review` config knob — when `true`, rendered clips land in `output/pending/`; user moves to `output/approved/` to publish. When `false`, uploader treats `output/pending/` as the publish queue.
-- [ ] CLI: `python -m src.policy_gate --clip-id <id>` and `python -m src.quality_screen --clip-id <id>`
-- [ ] **Acceptance:** banned-topic test inputs all caught; legitimate test set passes; zero false-positive duplicate matches on 20 hand-picked distinct clips.
+## Phase 4.5 — Policy Gate + Quality Screen
+> Status flow: `selected → policy_pass | rejected_policy` (post-select gate); `rendered → quality_pass | rejected_quality` (post-render screen, rejected files moved to `output/rejected/`). Two new clip status values, comment-only schema update. The editor's input filter flipped from `status='selected'` to `status='policy_pass'` so rejected_policy clips physically can't reach Phase 4.
+
+### Shared helpers
+- [x] `src/transcripts/clip_text.py` — `words_in_clip_window` (intersection-with-clipping; matches [src/subtitles/ass_writer.py:87-99](src/subtitles/ass_writer.py#L87) exactly) + `clip_text_from_words`. Both policy_gate and quality_screen consume this. 3 tests.
+- [x] `tests/conftest.py::StubConfig` extended with `banlist`, `hook_sanity_min_score`, `profanity_max_score`, `min_speech_density`, `min_word_confidence`, `dedup_lookback_days`, `phash_min_hamming`, `ollama_model`, and `paths.rejected_dir`.
+- [x] `src/state/repository.py` — `clips_for_policy_gate`, `clips_for_quality_screen`, `recent_dup_hashes(days)` returns `(clip_id, phash, audio_fp)`, `insert_dup_hash_rows(rows)` uses `INSERT OR IGNORE`.
+- [x] `src/state/schema.sql` — comment-only update on `clips.status` line adds `policy_pass`, `quality_pass`.
+
+### Pure evaluator vs. stateful runner (policy_gate)
+- [x] `src/policy_gate/evaluator.py::evaluate_clip_policy(cfg, clip_text, suggested_title, *, ollama_host=None) -> PolicyVerdict` — pure, no DB / no file I/O. Short-circuits on first content failure. Used directly by Phase 5's pre-upload re-check (forward-compatible API).
+- [x] `src/policy_gate/runner.py::gate_one_clip` — stateful; loads transcript, builds clip-window text, calls evaluator, applies `selected → policy_pass | rejected_policy` transition.
+
+### Per-check modules
+- [x] `src/policy_gate/banlist.py` — case-insensitive word-boundary substring match (multi-word phrases via `\s+` join). Cheap; runs first.
+- [x] `src/policy_gate/profanity.py` — `better_profanity` percentage-of-flagged-words score. Compared to `cfg.profanity_max_score`.
+- [x] `src/policy_gate/nsfw.py` — Ollama JSON-mode classifier; rejects on `label='nsfw' AND score >= 0.5`. Mirror of [src/selector/ranker.py](src/selector/ranker.py) HTTP/retry/keep-alive pattern. **Fail-soft on infrastructure failures** (network down, malformed JSON, **and unknown labels** after retry) — returns `label='infrastructure_failed'`.
+- [x] `src/policy_gate/hook_sanity.py` — Ollama 1-5 rater; rejects on `score < cfg.hook_sanity_min_score` (default 3). Same fail-soft rules.
+- [x] `src/quality_screen/density.py` — `len(words_in_clip_window) / clip_duration` ≥ `cfg.min_speech_density` (1.5 wps). Defensively returns 0.0 for nonpositive duration.
+- [x] `src/quality_screen/confidence.py` — mean of `word.probability` across the same window; missing field defaults to 0.0 (= reject signal).
+- [x] `src/quality_screen/duration.py` — wraps `editor.ffmpeg_runner.ffprobe_duration_seconds`; rejects outside [25, 65] s. Probe failure (None) is the foundational fail-soft — runner aborts the screen.
+- [x] `src/quality_screen/loudness.py` — `ffmpeg -af loudnorm=print_format=json -f null -`; parses trailing JSON block from stderr (`_JSON_BLOCK_RE`). **Three-tier classification**: `pass` (±0.5 LUFS) / `warn` (±0.5..±1.5, alert appended) / `reject` (>±1.5). Subprocess error or parse failure = fail-soft pass-with-alert.
+- [x] `src/quality_screen/dedup.py` — `imagehash.phash` on 5 frames at **10/30/50/70/90%** of duration (avoids endpoint black frames). Audio fingerprint via `pyacoustid.fingerprint_file`. **v1 reject signal is pHash-only** — Hamming distance < `cfg.phash_min_hamming` (8) to any stored phash. Audio fingerprints are stored to `dup_hashes.audio_fp` for a Phase 7 follow-up but don't gate rejection (chromaprint prefix-match is brittle across re-encodes). `compute_signals` deduplicates identical frame phashes before the `INSERT OR IGNORE` write — belt-and-suspenders against the `(clip_id, phash)` PK collision.
+
+### Quality screen rejected-file relocation
+- [x] On `rejected_quality`, `os.replace(pending_path → rejected_path)` first, then `repo.tx()` flips status + updates `output_path`. Best-effort consistency: SQLite tx cannot roll back the filesystem move. Three failure-mode branches tested independently (move OK + DB OK / move OK + DB fail / move fail + DB OK + result.reason gains `;move_failed`). `rejected_render` (Phase 4) does NOT relocate; only `rejected_quality`.
+
+### CLIs (mirror selector/editor)
+- [x] `python -m src.policy_gate [--clip-id] [--force] [--dry-run] [--config]` — exit codes `0=ok / 1=db missing / 2=clip not found`.
+- [x] `python -m src.quality_screen [--clip-id] [--force] [--dry-run] [--config]` — same exit codes.
+
+### Editor wiring change (Phase 4 update)
+- [x] [src/editor/runner.py:1-10](src/editor/runner.py) docstring: `selected -> rendered` becomes `policy_pass -> rendered`; failure paths leave clip at `policy_pass`.
+- [x] [src/editor/runner.py:67-75](src/editor/runner.py#L67) preflight tuple: `("selected", "rendered")` → `("policy_pass", "rendered")`.
+- [x] [src/editor/runner.py:241-247](src/editor/runner.py#L241) run_all queries: `WHERE status='selected'` → `WHERE status='policy_pass'`; `WHERE status IN ('selected','rendered')` → `WHERE status IN ('policy_pass','rendered')`.
+- [x] [src/editor/__main__.py](src/editor/__main__.py) docstring: examples reference `status='policy_pass'`; documented prerequisite that `policy_gate` runs first.
+- [x] [tests/test_editor_runner.py](tests/test_editor_runner.py) — `_setup` now advances seeded clip from `selected` to `policy_pass` post-upsert. 4 status-assertion lines flipped (`"selected" → "policy_pass"` for unchanged-state cases). 3 tests renamed (`...selected_or_rendered_skipped` → `...policy_pass_or_rendered_skipped`, `..._leaves_status_at_selected` → `..._leaves_status_at_policy_pass`, `..._renders_only_selected` → `..._renders_only_policy_pass`). Phase 4.5 regression test added: `test_selected_status_now_skipped_after_phase_4_5`.
+
+### Pre-upload rejection contract (declared for Phase 5; not implemented yet)
+- [x] `evaluate_clip_policy` API stable; Phase 5's uploader will call it directly without refactoring policy_gate.
+- [ ] **Phase 5 invariants** (flagged, not yet enforced — Phase 5 will): pre-upload re-check may flip `quality_pass → rejected_policy` only if `youtube_video_id IS NULL`; scheduled-but-rejected rows are acceptable; `daily_upload`'s selection MUST key on status to prevent re-queue.
+
+### Tests (82 new → 264 total)
+- [x] `tests/test_clip_text.py` (3) — words within window, intersection-with-clipping at boundaries, empty inputs.
+- [x] `tests/test_policy_banlist.py` (5) — case-insensitive word-boundary, multi-word phrase with whitespace tolerance, unicode, empty banlist, **clip-window scoping regression** (term outside the passed clip text does not match).
+- [x] `tests/test_policy_profanity.py` (4) — clean / profane / proportional-to-word-count / empty-text edge cases.
+- [x] `tests/test_policy_nsfw.py` (6) — safe-pass, nsfw-high-rejects, nsfw-low-doesnotreject, malformed-JSON-retry-recovers, network-failure-fail-soft, **unknown-label-fail-soft** (contract violation = infra failure, not content rejection).
+- [x] `tests/test_policy_hook_sanity.py` (6) — score above/below threshold, retry on malformed, network failure, score-out-of-range fail-soft, empty-input short-circuit.
+- [x] `tests/test_policy_evaluator.py` (3) — banlist short-circuits before Ollama (asserts NSFW/hook callers never invoked), all-pass runs all four checks, NSFW infrastructure_failed bubbles up to `verdict.infrastructure_failed=True`.
+- [x] `tests/test_policy_runner.py` (13) — preflight matrix (selected/policy_pass/rejected_policy/rendered/uploaded), `--force` re-gates policy_pass clips, transition to policy_pass with cleared rejection_reason, transition to rejected_policy with `<check>:<value>`, infrastructure_failed leaves clip at `selected`, missing transcript → error_no_transcript, dry-run no DB writes, run_all filters to selected only, batch alert appended for repeated Ollama failures.
+- [x] `tests/test_quality_density.py` (3) — above/below threshold, empty/zero-duration edge cases.
+- [x] `tests/test_quality_confidence.py` (3) — above-threshold, missing `probability` field defaults to 0.0, empty word list rejects.
+- [x] `tests/test_quality_duration.py` (4) — in-range / under-25 / over-65 / probe-failure-returns-None.
+- [x] `tests/test_quality_loudness.py` (6) — three-tier classification, JSON parsed from stderr, subprocess error fail-soft, malformed JSON fail-soft, warn-band boundary, reject-band beyond ±1.5.
+- [x] `tests/test_quality_dedup.py` (8) — frame timestamps avoid endpoints (10/30/50/70/90%), no-stored-rows passes, identical phash matches with distance 0, close phash under threshold matches, distance-above-threshold passes, invalid hex skipped, min-distance picked when multiple matches, `compute_signals` dedupes identical frame phashes.
+- [x] `tests/test_quality_relocation.py` (3) — three failure-mode branches: move OK + DB OK (file in `rejected/`, status flipped), move-fails + DB still flips (file stays in `pending/`, reason gains `;move_failed`), dry-run (no move + no DB write).
+- [x] `tests/test_quality_runner.py` (13) — preflight matrix, scheduled/uploaded clips locked, foundational probe-failure aborts (asserts loudness/dedup never invoked), missing output, all-pass inserts dup_hashes atomically, dry-run no insert, multi-fail concatenates reasons (`duration:18.2;density:1.1`), loudness warn band passes with alert, loudness reject band fails, run_all filters to rendered+unscheduled, run_all emits loudness_warn alert.
+- [x] `tests/test_editor_runner.py` (1 new + 3 renamed + 4 fixture flips) — Phase 4.5 regression test confirms `status='selected'` is now `skipped_wrong_status` for the editor.
+
+### Acceptance
+- [x] `pytest tests/` — **264 passing** (182 prior + 82 Phase 4.5).
+- [x] All four policy checks short-circuit correctly (banlist runs first; later checks don't run when an earlier one fails).
+- [x] Infrastructure failures (Ollama unreachable, malformed output, unknown labels) leave clips at their pre-gate status — never reject content because of a flaky model.
+- [x] Foundational duration probe abort: a clip with broken metadata returns `error_probe` and no other checks run, no dedup frames extracted.
+- [x] dup_hashes PK collision regression: 5 identical frame phashes collapse to 1 row via `set()`-dedupe + `INSERT OR IGNORE`.
+- [x] Rejected-file relocation: best-effort, all three failure branches tested independently. No "true atomicity" claim across filesystem + DB.
+- [x] Editor's input filter physically excludes `selected` and `rejected_policy` clips (regression test).
+- [ ] **Live, post-merge:** policy_gate sweep across the 296 Phase 3 clips; sample 5 `rejected_policy` rows and confirm rejection reason matches the clip-window transcript (NOT whole-video).
+- [ ] **Live, post-merge:** quality_screen sweep across the resulting `rendered` clips; ≥90% pass; failures reproducible on re-run.
+- [ ] **Live, post-merge:** hand-picked dedup gate — 20 distinct clips → 0 false-positive matches; 5 known near-duplicate pairs → 5/5 caught.
+- [ ] **Live, post-merge:** loudness gate distribution on 10 clips; if >2/10 land in warn band (±0.5..±1.5), escalate to two-pass loudnorm as a Phase 4 follow-up.
+- [ ] **Live, post-merge:** Idempotent skip — re-run on a `policy_pass` or `quality_pass` clip exits in <2 s with no Ollama / ffmpeg / ffprobe spawn.
+
+### Phase 4.5 live verification (run when ready)
+1. `pytest tests/` — expect 264 passing.
+2. **Single-clip policy gate:** `python -m src.policy_gate --clip-id <one Phase 3 clip>`. Expect `policy_pass` (or `rejected_policy` with `<check>:<value>` reason). Inspect `clips.rejection_reason`.
+3. **Idempotent skip:** re-run #2 immediately. Expect `skipped_already_gated`, no Ollama call, <2 s wall-clock.
+4. **Single-clip quality screen** on a rendered clip: `python -m src.quality_screen --clip-id <id>`. Expect `quality_pass` and 1-5 rows in `dup_hashes` for that clip_id. Re-run → `skipped_already_screened`.
+5. **Multi-fail probe:** force a duration-out-of-spec clip into `rendered` status, run quality_screen → expect `rejected_quality` with `duration:<n>` in reason and the file relocated to `output/rejected/`.
+6. **Full sweeps:**
+   - `python -m src.policy_gate` — expect ~296 inputs split into `policy_pass` and `rejected_policy`.
+   - `python -m src.editor` — confirms it now picks up policy_pass clips (the input filter changed).
+   - `python -m src.quality_screen` — expect ~95% pass on first sweep.
+7. **Sanity SQL:** `sqlite3 data/state.db "SELECT status, COUNT(*) FROM clips GROUP BY status;"` should show `policy_pass + rejected_policy ≈ 296` after the gate sweep.
+8. **Acceptance gates:** sample 20 distinct clips through quality_screen → 0 dedup false-positives; sample 5 known near-duplicate pairs → 5/5 caught.
 
 ## Phase 5 — Uploader
 - [ ] OAuth refresh-token loader

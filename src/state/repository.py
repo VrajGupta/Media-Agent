@@ -201,6 +201,61 @@ class Repository:
     def clips_by_status(self, status: str) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM clips WHERE status=?", (status,)).fetchall()
 
+    def clips_for_policy_gate(self) -> list[sqlite3.Row]:
+        """Clips ready for the post-select policy gate (Phase 4.5).
+
+        Ordered by clip_id for deterministic batch reruns.
+        """
+        return self.conn.execute(
+            "SELECT * FROM clips WHERE status='selected' ORDER BY clip_id"
+        ).fetchall()
+
+    def clips_for_quality_screen(self) -> list[sqlite3.Row]:
+        """Clips ready for the post-render quality screen (Phase 4.5).
+
+        Excludes scheduled / uploaded clips so the screen is never run on a
+        clip whose downstream pointer state would be invalidated by a flip
+        to rejected_quality.
+        """
+        return self.conn.execute(
+            "SELECT * FROM clips WHERE status='rendered' "
+            "AND publish_at_utc IS NULL AND youtube_video_id IS NULL "
+            "ORDER BY clip_id"
+        ).fetchall()
+
+    # ---- dup_hashes (Phase 4.5 quality_screen) ----
+
+    def recent_dup_hashes(self, days: int) -> list[sqlite3.Row]:
+        """Returns (clip_id, phash, audio_fp) rows from the last N days.
+
+        Includes clip_id so rejection reasons can name the matching prior
+        clip. The 90-day window matches cfg.dedup_lookback_days.
+        """
+        return self.conn.execute(
+            "SELECT clip_id, phash, audio_fp FROM dup_hashes "
+            "WHERE created_at >= datetime('now', ?)",
+            (f"-{int(days)} days",),
+        ).fetchall()
+
+    def insert_dup_hash_rows(
+        self,
+        rows: list[tuple[str, str, str | None]],
+    ) -> None:
+        """Bulk-insert dup_hashes rows for a single clip.
+
+        Caller must dedupe the phash list (the schema PK is (clip_id, phash))
+        and wrap this call in repo.tx() together with set_clip_status. We use
+        INSERT OR IGNORE as a belt-and-suspenders against the rare case where
+        two of the five sampled frames produce the same phash.
+        """
+        if not rows:
+            return
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO dup_hashes (clip_id, phash, audio_fp) "
+            "VALUES (?, ?, ?)",
+            rows,
+        )
+
     # ---- gameplay rotation ----
 
     def read_gameplay_pointer(self) -> int:

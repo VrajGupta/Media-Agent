@@ -1,12 +1,17 @@
 """Editor CLI.
 
 Examples:
-    python -m src.editor                            # all clips at status='selected'
+    python -m src.editor                            # all clips at status='policy_pass'
     python -m src.editor --clip-id <id>             # single clip
     python -m src.editor --force                    # re-render rendered clips
                                                     # (gated: only if not yet scheduled/uploaded)
     python -m src.editor --dry-run                  # build ASS + argv, no ffmpeg, no DB writes
     python -m src.editor --config alt.yaml
+
+Phase 4.5 introduced policy_gate between selector and editor. Clips must
+pass policy_gate (status='policy_pass') before this CLI will render them.
+Run `python -m src.policy_gate` first to advance selected clips into
+policy_pass / rejected_policy.
 """
 
 from __future__ import annotations

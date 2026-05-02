@@ -36,9 +36,11 @@ CREATE TABLE IF NOT EXISTS clips (
     publish_slot_local TEXT,                         -- e.g. 2026-04-25 09:00 (canonical TZ)
     output_path        TEXT,                         -- path under output/pending or output/approved
     youtube_video_id   TEXT,
-    status             TEXT NOT NULL,                -- selected|rejected_policy|rendered|rejected_render|rejected_quality|approved|uploaded
-                                                     -- Phase 4 transitions: selected -> rendered (file lives at output_path; title_slug filled)
+    status             TEXT NOT NULL,                -- selected|policy_pass|rejected_policy|rendered|rejected_render|quality_pass|rejected_quality|approved|uploaded
+                                                     -- Phase 4 transitions: policy_pass -> rendered (file lives at output_path; title_slug filled)
                                                      --                  -> rejected_render (irrecoverable: source mp4 missing/unreadable)
+                                                     -- Phase 4.5 transitions: selected -> policy_pass | rejected_policy (post-select gate; clip-window text)
+                                                     --                    rendered -> quality_pass | rejected_quality (post-render screen; rejected file moved to output/rejected/)
     rejection_reason   TEXT,
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT NOT NULL DEFAULT (datetime('now'))

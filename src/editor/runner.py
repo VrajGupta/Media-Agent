@@ -1,10 +1,14 @@
-"""Editor orchestration (Phase 4): selected -> rendered.
+"""Editor orchestration (Phase 4): policy_pass -> rendered.
 
 Per-clip flow:
   preflight status -> resolve raw mp4 + transcript -> compute slug + tmp paths
   -> reserve gameplay (short tx) -> write ASS file -> build ffmpeg argv
   -> subprocess.run -> on success: os.replace + commit (clip status + gameplay
-  cursor in one tx). On failure: leave clip at 'selected', alert at run end.
+  cursor in one tx). On failure: leave clip at 'policy_pass', alert at run end.
+
+Phase 4.5 introduced a policy_gate stage between selector and editor. Clips
+must pass policy_gate (status='policy_pass') before the editor will pick them
+up — this guarantees rejected_policy clips never reach Phase 4.
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ def _preflight(row: sqlite3.Row, force: bool) -> Optional[EditorOutcome]:
     advanced into Phase 5/6 (publish_at_utc is null AND youtube_video_id is null).
     """
     status = row["status"]
-    if status not in ("selected", "rendered"):
+    if status not in ("policy_pass", "rendered"):
         return EditorOutcome.skipped_wrong_status
     if status == "rendered":
         if not force:
@@ -239,11 +243,11 @@ def run_all(
 ) -> list[EditorResult]:
     if force:
         rows = repo.conn.execute(
-            "SELECT clip_id FROM clips WHERE status IN ('selected','rendered') ORDER BY clip_id"
+            "SELECT clip_id FROM clips WHERE status IN ('policy_pass','rendered') ORDER BY clip_id"
         ).fetchall()
     else:
         rows = repo.conn.execute(
-            "SELECT clip_id FROM clips WHERE status='selected' ORDER BY clip_id"
+            "SELECT clip_id FROM clips WHERE status='policy_pass' ORDER BY clip_id"
         ).fetchall()
 
     if not rows:

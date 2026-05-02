@@ -11,7 +11,7 @@ A fire-and-forget Python agent that automates a "repost / brainrot Shorts" YouTu
   - **Weekly heavy run** — `weekly_run.py` triggered by Windows Task Scheduler once a week, ~1h. Discovers, downloads, selects, renders, and assigns each clip a `publish_at` timestamp spread across the next 7 days.
   - **Daily upload run** — `daily_upload.py` triggered by Windows Task Scheduler once a day, ~5 min. Uploads that day's clips to YouTube with `privacyStatus=private` + `publishAt=<slot>`, letting YouTube auto-publish at the slot.
   - This split exists because YouTube's default API quota allows only ~6 inserts/day. Quota-increase audit is a future task; once approved, the daily run collapses into the weekly run.
-- **Runtime:** the user's Windows PC (not the Mac this repo lives on). Code is developed here, then transferred to the PC.
+- **Development & runtime:** the user's Windows laptop (single machine). Code is developed and run on the same PC; no separate dev/runtime environments. Earlier docs referenced a Mac development host — that's stale; ignore it.
 
 ## Stack
 Python 3.11+ · ffmpeg+NVENC · yt-dlp · faster-whisper (CUDA) · YouTube Data API v3 · Ollama (`qwen2.5:3b-instruct`, local) · Windows Task Scheduler · SQLite. See `skills.md` for the full rationale. **Cost: $0/month.**

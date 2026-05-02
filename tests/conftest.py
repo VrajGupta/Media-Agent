@@ -48,12 +48,14 @@ class StubConfig:
 
     class _Paths:
         def __init__(self, raw_dir: str, logs_dir: str, state_db: str,
-                     transcripts_dir: str = "", pending_dir: str = ""):
+                     transcripts_dir: str = "", pending_dir: str = "",
+                     rejected_dir: str = ""):
             self.raw_dir = raw_dir
             self.logs_dir = logs_dir
             self.state_db = state_db
             self.transcripts_dir = transcripts_dir
             self.pending_dir = pending_dir
+            self.rejected_dir = rejected_dir
 
     def __init__(
         self,
@@ -75,6 +77,15 @@ class StubConfig:
         nvenc_cq: int = 23,
         loudness_target_lufs: float = -14.0,
         gameplay_pool: list[str] | None = None,
+        # Phase 4.5 — policy_gate / quality_screen knobs.
+        banlist: list[str] | None = None,
+        hook_sanity_min_score: int = 3,
+        profanity_max_score: int = 5,
+        min_speech_density: float = 1.5,
+        min_word_confidence: float = 0.6,
+        dedup_lookback_days: int = 90,
+        phash_min_hamming: int = 8,
+        ollama_model: str = "qwen2.5:3b-instruct",
     ):
         self.disk_soft_cap_gb = soft_cap_gb
         self.disk_hard_cap_gb = hard_cap_gb
@@ -92,18 +103,29 @@ class StubConfig:
         self.nvenc_cq = nvenc_cq
         self.loudness_target_lufs = loudness_target_lufs
         self.gameplay_pool = gameplay_pool if gameplay_pool is not None else []
+        # Phase 4.5
+        self.banlist = banlist if banlist is not None else []
+        self.hook_sanity_min_score = hook_sanity_min_score
+        self.profanity_max_score = profanity_max_score
+        self.min_speech_density = min_speech_density
+        self.min_word_confidence = min_word_confidence
+        self.dedup_lookback_days = dedup_lookback_days
+        self.phash_min_hamming = phash_min_hamming
+        self.ollama_model = ollama_model
         from pathlib import Path
         self.project_root = Path(tmp_path)
         raw = tmp_path / "raw"
         logs = tmp_path / "logs"
         transcripts = tmp_path / "transcripts"
         pending = tmp_path / "output" / "pending"
-        for d in (raw, logs, transcripts, pending):
+        rejected = tmp_path / "output" / "rejected"
+        for d in (raw, logs, transcripts, pending, rejected):
             d.mkdir(parents=True, exist_ok=True)
         self.paths = self._Paths(
             str(raw), str(logs), str(tmp_path / "state.db"),
             transcripts_dir=str(transcripts),
             pending_dir=str(pending),
+            rejected_dir=str(rejected),
         )
 
     def abs_path(self, rel: str):

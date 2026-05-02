@@ -69,6 +69,9 @@ def _setup(tmp_path):
         hook="h", suggested_title="Cool Hook Title",
         selection_method="heatmap_aided",
     )
+    # Phase 4.5: advance clip past the policy_gate. Editor reads
+    # status='policy_pass' as its input now (selected clips wait for the gate).
+    repo.set_clip_status("v1_30_60", "policy_pass")
     return cfg, repo
 
 
@@ -122,9 +125,22 @@ def test_render_success_flips_status_and_advances_gameplay(tmp_path, monkeypatch
 # ---- preflight matrix -------------------------------------------------------
 
 
-def test_status_other_than_selected_or_rendered_skipped(tmp_path, monkeypatch):
+def test_status_other_than_policy_pass_or_rendered_skipped(tmp_path, monkeypatch):
     cfg, repo = _setup(tmp_path)
     repo.set_clip_status("v1_30_60", "rejected_policy", reason="banned word")
+    _patch_ffprobe(monkeypatch)
+    _patch_run_ffmpeg(monkeypatch)
+
+    r = render_one_clip(repo=repo, cfg=cfg, clip_id="v1_30_60")
+    assert r.outcome == EditorOutcome.skipped_wrong_status
+
+
+def test_selected_status_now_skipped_after_phase_4_5(tmp_path, monkeypatch):
+    """Phase 4.5 regression: status='selected' is no longer editor-eligible.
+
+    The clip must have been advanced to 'policy_pass' by policy_gate first."""
+    cfg, repo = _setup(tmp_path)
+    repo.set_clip_status("v1_30_60", "selected")
     _patch_ffprobe(monkeypatch)
     _patch_run_ffmpeg(monkeypatch)
 
@@ -200,10 +216,10 @@ def test_missing_transcript_does_not_advance(tmp_path, monkeypatch):
     r = render_one_clip(repo=repo, cfg=cfg, clip_id="v1_30_60")
     assert r.outcome == EditorOutcome.error_no_transcript
     row = repo.conn.execute("SELECT status FROM clips WHERE clip_id='v1_30_60'").fetchone()
-    assert row["status"] == "selected"  # unchanged
+    assert row["status"] == "policy_pass"  # unchanged
 
 
-def test_ffmpeg_failure_leaves_status_at_selected(tmp_path, monkeypatch):
+def test_ffmpeg_failure_leaves_status_at_policy_pass(tmp_path, monkeypatch):
     cfg, repo = _setup(tmp_path)
     _patch_ffprobe(monkeypatch)
     _patch_run_ffmpeg(monkeypatch, returncode=1, write_output=False)
@@ -211,7 +227,7 @@ def test_ffmpeg_failure_leaves_status_at_selected(tmp_path, monkeypatch):
     r = render_one_clip(repo=repo, cfg=cfg, clip_id="v1_30_60")
     assert r.outcome == EditorOutcome.error_ffmpeg
     row = repo.conn.execute("SELECT status, output_path FROM clips WHERE clip_id='v1_30_60'").fetchone()
-    assert row["status"] == "selected"
+    assert row["status"] == "policy_pass"
     assert row["output_path"] is None
     # gameplay pointer + cursor unchanged
     assert repo.read_gameplay_pointer() == 0
@@ -228,7 +244,7 @@ def test_zero_byte_output_treated_as_failure(tmp_path, monkeypatch):
     r = render_one_clip(repo=repo, cfg=cfg, clip_id="v1_30_60")
     assert r.outcome == EditorOutcome.error_ffmpeg
     row = repo.conn.execute("SELECT status FROM clips WHERE clip_id='v1_30_60'").fetchone()
-    assert row["status"] == "selected"
+    assert row["status"] == "policy_pass"
 
 
 # ---- dry-run ---------------------------------------------------------------
@@ -249,7 +265,7 @@ def test_dry_run_no_subprocess_no_db_writes(tmp_path, monkeypatch, capsys):
 
     # No DB writes.
     row = repo.conn.execute("SELECT status, output_path FROM clips WHERE clip_id='v1_30_60'").fetchone()
-    assert row["status"] == "selected"
+    assert row["status"] == "policy_pass"
     assert row["output_path"] is None
 
     # No file written at the target path.
@@ -264,7 +280,7 @@ def test_dry_run_no_subprocess_no_db_writes(tmp_path, monkeypatch, capsys):
 # ---- run_all ---------------------------------------------------------------
 
 
-def test_run_all_renders_only_selected(tmp_path, monkeypatch):
+def test_run_all_renders_only_policy_pass(tmp_path, monkeypatch):
     cfg, repo = _setup(tmp_path)
     # Add a second clip in a status that should be skipped.
     repo.upsert_selector_clip(
