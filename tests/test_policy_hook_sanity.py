@@ -1,4 +1,4 @@
-"""Ollama hook-sanity rater."""
+"""Ollama hook-sanity rater (binary accept/reject)."""
 
 from __future__ import annotations
 
@@ -35,18 +35,19 @@ def _patch_post(monkeypatch, responses):
     return calls
 
 
-def test_high_score_passes(monkeypatch):
-    _patch_post(monkeypatch, [_resp({"score": 5, "reason": "perfect"})])
+def test_accept_verdict_passes(monkeypatch):
+    _patch_post(monkeypatch, [_resp({"verdict": "accept", "reason": "topic matches"})])
     v = hook_mod.rate_hook_sanity("clip text", "Great Title", model="m")
-    assert v.score == 5
+    assert v.accepted is True
     assert v.infrastructure_failed is False
+    assert "topic matches" in v.reason
 
 
-def test_low_score_returned_as_is(monkeypatch):
-    """Threshold comparison happens in the evaluator, not the rater."""
-    _patch_post(monkeypatch, [_resp({"score": 1, "reason": "misleading"})])
+def test_reject_verdict_returned_as_is(monkeypatch):
+    """The rater only reports the verdict; rejection logic is in the evaluator."""
+    _patch_post(monkeypatch, [_resp({"verdict": "reject", "reason": "topic mismatch"})])
     v = hook_mod.rate_hook_sanity("clip text", "Click bait!", model="m")
-    assert v.score == 1
+    assert v.accepted is False
     assert v.infrastructure_failed is False
 
 
@@ -56,10 +57,10 @@ def test_malformed_json_retries(monkeypatch):
         raise_for_status=lambda: None,
         json=lambda: {"message": {"content": "{not json"}},
     )
-    good = _resp({"score": 4, "reason": "ok"})
+    good = _resp({"verdict": "accept", "reason": "ok"})
     calls = _patch_post(monkeypatch, [bad, good])
     v = hook_mod.rate_hook_sanity("clip text", "Title", model="m")
-    assert v.score == 4
+    assert v.accepted is True
     assert calls["n"] == 2
 
 
@@ -70,12 +71,16 @@ def test_network_failure_returns_infrastructure_failed(monkeypatch):
     ])
     v = hook_mod.rate_hook_sanity("clip text", "Title", model="m")
     assert v.infrastructure_failed is True
-    assert v.score == 0
+    assert v.accepted is False
 
 
-def test_score_out_of_range_after_retry_is_infrastructure_failure(monkeypatch):
-    """score=10 violates the rubric; treated as a contract failure."""
-    bad = _resp({"score": 10, "reason": "out of range"})
+def test_unknown_verdict_after_retry_is_infrastructure_failure(monkeypatch):
+    """Verdict strings other than accept/reject are contract failures.
+
+    Same path as malformed JSON: retry once, then fail-soft. We never reject
+    content because of an Ollama bug.
+    """
+    bad = _resp({"verdict": "maybe", "reason": "out of range"})
     _patch_post(monkeypatch, [bad, bad])
     v = hook_mod.rate_hook_sanity("clip text", "Title", model="m")
     assert v.infrastructure_failed is True

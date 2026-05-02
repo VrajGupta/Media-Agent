@@ -51,11 +51,27 @@ def test_nsfw_high_score_rejects(monkeypatch):
 
 
 def test_nsfw_low_score_does_not_reject(monkeypatch):
-    """label='nsfw' but score<0.5 should not reject — model is unsure."""
+    """label='nsfw' but score<0.85 should not reject. The 0.85 threshold was
+    raised from 0.5 during live verification: qwen2.5:3b scores borderline
+    content (trauma, casual drug mentions in podcasts) at 0.6-0.85 with
+    high variance, while genuinely graphic content scores 0.9+. We let
+    borderline content through; only confident NSFW rejects."""
     _patch_post(monkeypatch, [_resp({"label": "nsfw", "score": 0.30, "reason": "marginal"})])
     v = nsfw_mod.classify_nsfw("clip text", model="m")
     assert v.label == "nsfw"
     assert v.is_rejection is False
+
+
+def test_nsfw_exactly_at_borderline_max_does_not_reject(monkeypatch):
+    """Score in the 0.6-0.85 borderline band passes — too unreliable to reject on.
+
+    The threshold is strictly-greater-than 0.85, so exactly 0.85 still passes.
+    Genuine NSFW scores 0.9+ deterministically per Phase 4.5 live data."""
+    _patch_post(monkeypatch, [_resp({"label": "nsfw", "score": 0.85, "reason": "borderline"})])
+    v = nsfw_mod.classify_nsfw("clip text", model="m")
+    assert v.label == "nsfw"
+    assert v.score == 0.85
+    assert v.is_rejection is False  # exactly 0.85 is NOT a rejection
 
 
 def test_malformed_json_retries_then_recovers(monkeypatch):

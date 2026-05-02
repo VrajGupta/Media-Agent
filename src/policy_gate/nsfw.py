@@ -129,7 +129,15 @@ def classify_nsfw(
             )
             continue
 
-        is_rejection = (label == "nsfw" and score >= 0.5)
+        # Reject only on high-confidence NSFW (>0.85). qwen2.5:3b returns
+        # 0.6-0.85 on borderline content (trauma discussion, casual drug
+        # mentions in podcasts) with high run-to-run variance, while genuine
+        # explicit content scores 0.9+ deterministically. The strictly-greater
+        # boundary at 0.85 was chosen empirically during Phase 4.5 live
+        # verification: borderline content maxes at 0.85, genuine NSFW starts
+        # at 0.9. Lets standard mature-but-publishable Joe Rogan content
+        # through while catching graphic sexual / self-harm / hate-speech.
+        is_rejection = (label == "nsfw" and score > 0.85)
         return NsfwVerdict(label=label, score=score, reason=reason, is_rejection=is_rejection)
 
     return NsfwVerdict(

@@ -5,10 +5,11 @@ re-check. No DB writes, no file I/O beyond Ollama HTTP. Returns a structured
 verdict; the caller decides what to do with it.
 
 Order of checks (short-circuit on first failure):
-  1. banlist     — substring match against cfg.banlist
-  2. profanity   — better-profanity score > cfg.profanity_max_score
-  3. nsfw        — Ollama: label='nsfw' AND score>=0.5
-  4. hook_sanity — Ollama: score < cfg.hook_sanity_min_score
+  1. banlist      — substring match against cfg.banlist
+  2. profanity    — better-profanity score > cfg.profanity_max_score
+  3. nsfw         — Ollama: label='nsfw' AND score>0.85
+  4. hook_sanity  — Ollama: title misrepresents the clip topic (binary)
+  5. topic_filter — Ollama: clip's primary topic is religion or war (binary)
 
 Infrastructure failures (Ollama unreachable, malformed output, unknown labels
 after retry) bubble up via PolicyVerdict.infrastructure_failed=True so the
@@ -25,6 +26,7 @@ from src.policy_gate import banlist as banlist_mod
 from src.policy_gate import hook_sanity as hook_mod
 from src.policy_gate import nsfw as nsfw_mod
 from src.policy_gate import profanity as profanity_mod
+from src.policy_gate import topic_filter as topic_mod
 
 
 @dataclass
@@ -127,7 +129,11 @@ def evaluate_clip_policy(
         name="nsfw", passed=True, value=nsfw_value, reason=nsfw_verdict.reason,
     ))
 
-    # 4. hook_sanity — Ollama call.
+    # 4. hook_sanity — Ollama call. Binary accept/reject (qwen2.5:3b can't
+    # do 1-5 ordinal scoring — empirically verified; see hook_sanity.py
+    # docstring). cfg.hook_sanity_min_score is retained in the schema for
+    # backward compat but no longer consulted; the verdict itself is the
+    # rejection signal.
     hook_verdict = hook_mod.rate_hook_sanity(
         clip_text,
         suggested_title or "",
@@ -141,8 +147,8 @@ def evaluate_clip_policy(
             infrastructure_reason=f"hook_sanity:{hook_verdict.reason}",
             checks=checks,
         )
-    hook_value = str(hook_verdict.score)
-    if hook_verdict.score < cfg.hook_sanity_min_score:
+    hook_value = "accept" if hook_verdict.accepted else "reject"
+    if not hook_verdict.accepted:
         checks.append(CheckResult(
             name="hook_sanity", passed=False, value=hook_value, reason=hook_verdict.reason,
         ))
@@ -154,6 +160,38 @@ def evaluate_clip_policy(
         )
     checks.append(CheckResult(
         name="hook_sanity", passed=True, value=hook_value, reason=hook_verdict.reason,
+    ))
+
+    # 5. topic_filter — Ollama call. Channel content policy: no clips
+    # primarily about religion or war (locked Phase 4.5 follow-up requirement).
+    # Binary classifier returns "allowed" | "religion" | "war"; rejects on
+    # the latter two.
+    topic_verdict = topic_mod.classify_topic(
+        clip_text,
+        model=cfg.ollama_model,
+        host=ollama_host,
+    )
+    if topic_verdict.infrastructure_failed:
+        return PolicyVerdict(
+            passed=False,
+            infrastructure_failed=True,
+            infrastructure_reason=f"topic_filter:{topic_verdict.reason}",
+            checks=checks,
+        )
+    if topic_verdict.is_rejection:
+        checks.append(CheckResult(
+            name="topic_filter", passed=False,
+            value=topic_verdict.verdict, reason=topic_verdict.reason,
+        ))
+        return PolicyVerdict(
+            passed=False,
+            failed_check="topic_filter",
+            failed_value=topic_verdict.verdict,
+            checks=checks,
+        )
+    checks.append(CheckResult(
+        name="topic_filter", passed=True,
+        value=topic_verdict.verdict, reason=topic_verdict.reason,
     ))
 
     return PolicyVerdict(passed=True, checks=checks)
