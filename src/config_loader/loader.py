@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -25,6 +25,7 @@ class Paths(BaseModel):
     approved_dir: str
     rejected_dir: str
     dry_run_dir: str
+    orphans_dir: str = "output/orphans"   # Phase 5; default for backward compat with older config files
     logs_dir: str
     oauth_token: str
     client_secrets: str
@@ -58,6 +59,10 @@ class Config(BaseModel):
     clips_per_video: int
     selector_max_candidates: int = 25
 
+    # Captions (Pivot.1) — caption-first transcript path
+    caption_min_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    caption_prefer_manual: bool = True
+
     human_review: bool
     banlist: list[str]
     hook_sanity_min_score: int
@@ -75,14 +80,22 @@ class Config(BaseModel):
     download_max_height: int = 1080
     download_estimated_bytes_per_video: int = 524288000
 
+    # Render (Pivot.3) — full-screen blurred-bg replaces split-screen.
+    # top_pane_height / bottom_pane_height / gameplay_pool removed; older
+    # config.yaml files with those fields will be silently ignored by pydantic
+    # (they're not declared here), letting the user edit at their pace.
     output_resolution: list[int]
-    top_pane_height: int
-    bottom_pane_height: int
+    render_strategy: Literal["blurred_bg", "center_crop", "letterbox"] = "blurred_bg"
+    blurred_bg_sigma: int = Field(default=20, ge=0, le=100)
+    source_pane_aspect: str = "16:9"
     nvenc_preset: str
     nvenc_cq: int
     loudness_target_lufs: float
 
-    gameplay_pool: list[str]
+    # Copyright acknowledgement (Pivot.0) — optional string the user sets to
+    # acknowledge the elevated strike risk of the movie-clip pivot. Surfaced
+    # as a WARN in bootstrap --check; not a hard gate.
+    copyright_acknowledgement: Optional[str] = None
 
     youtube_quota_daily_units: int
     youtube_quota_ceiling_units: int

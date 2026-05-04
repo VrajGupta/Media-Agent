@@ -223,6 +223,90 @@ class Repository:
             "ORDER BY clip_id"
         ).fetchall()
 
+    # ---- uploader (Phase 5) ----
+
+    def clips_for_upload(self) -> list[sqlite3.Row]:
+        """Clips ready for the uploader: quality_pass or approved, with a
+        scheduled publish_at_utc and no youtube_video_id yet.
+
+        Ordered by publish_at_utc ASC (then clip_id) so the daily upload run
+        publishes oldest-slot-first. NULL publish_at_utc clips are excluded
+        — they're waiting on slot_planner (Phase 6); the standalone CLI's
+        `--clip-id --publish-at` path handles single-clip ad-hoc uploads.
+        """
+        return self.conn.execute(
+            "SELECT * FROM clips "
+            "WHERE status IN ('quality_pass', 'approved') "
+            "AND publish_at_utc IS NOT NULL "
+            "AND youtube_video_id IS NULL "
+            "ORDER BY publish_at_utc ASC, clip_id ASC"
+        ).fetchall()
+
+    def get_clip_with_video(self, clip_id: str) -> sqlite3.Row | None:
+        """Joined clips + videos row for the templater.
+
+        Returns columns from both tables; aliases the videos columns with a
+        v_ prefix (v_video_id, v_title, v_channel, v_keyword) so the caller
+        can disambiguate from the clips columns. Returns None if the clip
+        doesn't exist (defensive — every clip should have a video).
+        """
+        return self.conn.execute(
+            """
+            SELECT
+                c.*,
+                v.video_id  AS v_video_id,
+                v.title     AS v_title,
+                v.channel   AS v_channel,
+                v.keyword   AS v_keyword
+            FROM clips c
+            JOIN videos v ON v.video_id = c.video_id
+            WHERE c.clip_id = ?
+            """,
+            (clip_id,),
+        ).fetchone()
+
+    def set_clip_youtube_id(self, clip_id: str, youtube_video_id: str) -> None:
+        """Narrow critical-section update: write the YouTube videoId onto the
+        clip row WITHOUT touching status. Called by the uploader IMMEDIATELY
+        after the API call succeeds (step 10a in the post-upload persistence
+        sequence) so the next run cannot double-upload even if the
+        subsequent status / uploads-row write fails.
+
+        Caller wraps in repo.tx(). The narrowness of this update is intentional
+        — every additional column written here widens the critical section
+        between API success and durable DB state.
+        """
+        self.conn.execute(
+            "UPDATE clips SET youtube_video_id=?, updated_at=datetime('now') WHERE clip_id=?",
+            (youtube_video_id, clip_id),
+        )
+
+    def upsert_upload(
+        self,
+        clip_id: str,
+        youtube_video_id: str,
+        publish_at_utc: str,
+        quota_units_used: int,
+    ) -> None:
+        """Insert (or update on conflict) an uploads row.
+
+        Uses explicit ON CONFLICT(clip_id) DO UPDATE rather than
+        INSERT OR REPLACE so uploaded_at (the default-on-INSERT timestamp)
+        is preserved across retries — REPLACE would silently bump it. PK
+        on uploads is clip_id.
+        """
+        self.conn.execute(
+            """
+            INSERT INTO uploads (clip_id, youtube_video_id, publish_at_utc, quota_units_used)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(clip_id) DO UPDATE SET
+                youtube_video_id = excluded.youtube_video_id,
+                publish_at_utc   = excluded.publish_at_utc,
+                quota_units_used = excluded.quota_units_used
+            """,
+            (clip_id, youtube_video_id, publish_at_utc, int(quota_units_used)),
+        )
+
     # ---- dup_hashes (Phase 4.5 quality_screen) ----
 
     def recent_dup_hashes(self, days: int) -> list[sqlite3.Row]:

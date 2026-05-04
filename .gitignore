@@ -15,6 +15,7 @@ output/pending/*.mp4
 output/approved/*.mp4
 output/rejected/*.mp4
 output/dry_run/*.json
+output/orphans/*.json
 
 data/gameplay/*.mp4
 

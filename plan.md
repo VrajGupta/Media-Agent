@@ -162,8 +162,8 @@ python -m src.selector --config alt.yaml
 - `pytest tests/` ≥ 85 passing (~15 new).
 - Re-run on a `selected` video without `--force` exits in < 2 s with no Whisper load.
 
-## Phase 4 — Vertical Reformat & Subtitles (Day 5–7)
-> Phase 3 ends at `clips.status='selected'` with `(start_s, end_s, hook, suggested_title, selection_method)` populated and a cached transcript at `data/transcripts/{video_id}.json`. Phase 4 turns each selected clip into a 1080×1920 H.264 mp4 in `output/pending/`: split-screen with the source video on top (center-cropped) and a looping background gameplay clip on the bottom, karaoke-style word-by-word ASS subtitles burned in, audio loudnorm'd to -14 LUFS, encoded with `h264_nvenc` on the RTX 3070 — single ffmpeg pass per clip.
+## Phase 4 — Vertical Reformat & Subtitles (Day 5–7) — REWRITTEN BY PIVOT.3
+> Phase 3 ends at `clips.status='selected'` with `(start_s, end_s, hook, suggested_title, selection_method)` populated and a cached transcript at `data/transcripts/{video_id}.json` (schema v2 post-pivot). Phase 4.5 then transitions to `policy_pass`. Phase 4 turns each `policy_pass` clip into a 1080×1920 H.264 mp4 in `output/pending/`: **post-pivot, the format is full-screen movie-clip on a blurred-background extension** (no split-screen, no gameplay). Foreground 1080×608 (16:9 inside the 9:16 frame, full source frame preserved) on a self-cover blurred background (gblur sigma=20). Karaoke-style word-by-word ASS subtitles burned at `\pos(540, 1500)`, audio loudnorm'd to -14 LUFS, encoded with `h264_nvenc` on the RTX 3070 — single ffmpeg pass per clip. Pre-render audio probe rejects clips with no audio stream (`rejected_render: no_audio_stream`). See agents.md §4 for the full filtergraph.
 
 ### Status flow
 `selected → rendered`
@@ -361,7 +361,26 @@ Exit codes: 0 = ok, 1 = config/db missing, 2 = clip-id not found.
 - All rejections write `clips.rejection_reason`. Rejected clips are not rendered or uploaded.
 - **Acceptance:** all banned-topic test inputs caught; legitimate test set passes; zero false-positive duplicate matches on 20 hand-picked distinct clips.
 
-## Phase 5 — Uploader (Day 7–8)
+## Phase 4.6 — Content Pivot (movie clips, full-screen) — IN PROGRESS
+
+**Trigger (2026-05-04):** user pivoted from "podcast/highlight + Subway gameplay split-screen" to "full-screen movie-clip Shorts with caption-first transcripts". This invalidates Phase 4's split-screen renderer + gameplay rotation; Phase 0/1/2/2.5/4.5 are mostly content-agnostic.
+
+### Sub-phases (incremental, one commit per step)
+- **Pivot.0** — Config + memory updates: keywords swap, render_strategy="blurred_bg", caption_min_confidence, copyright_acknowledgement; `src/config_loader/loader.py` + 4 new tests; CLAUDE.md / agents.md / plan.md / progress.md updated.
+- **Pivot.1** — `src/captions/` module: yt-dlp CC fetcher + JSON3/VTT/SRT parsers writing schema_v2 transcripts with `timing_source` + per-word `confidence_source`. Phase 2 sidecar reuse. ~24 new tests + 3 quality_confidence updates.
+- **Pivot.2** — `src/selector/transcriber.py` caption-first cache reuse via `timing_source` switch. ~3 new tests.
+- **Pivot.3** — `src/editor/` rewrite: drop gameplay rotation; new filtergraph (split + gblur + overlay + ass); pre-render audio probe; `\pos(540, 1500)` subtitle position. Reference-cleanup gate before deleting gameplay code. Editor tests rewritten.
+- **Pivot.4** — Phase 4.5 banlist/profanity tune for movie content (no code).
+- **Pivot.5** — Live keyword sweep + caption-reuse-rate measurement + visual QA on PC.
+- **Pivot.6** — Resume Phase 5 (separate plan, drafted but paused).
+
+**Acceptance gates:**
+- ~290 tests passing.
+- ≥5 movie-clip Shorts in `output/pending/` with the new full-screen blurred-bg format.
+- Caption-reuse-rate ≥ 30% (manual + auto word-level captions out of all `captions_fetched` videos).
+- Live-check ordering invariant: editor ALWAYS runs after policy_gate (status='policy_pass' input filter, locked since Phase 4.5).
+
+## Phase 5 — Uploader (PAUSED pending Pivot completion)
 - `youtube.videos.insert` with resumable upload.
 - `status.privacyStatus=private` + `status.publishAt=<ISO UTC>` so YouTube auto-publishes at the scheduled slot.
 - **`--dry-run` mode:** writes the would-be insert body to `output/dry_run/{clip_id}.json`, makes no API call. Used for offline lint and CI-style smoke tests.

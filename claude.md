@@ -1,7 +1,9 @@
 # Project Context — Media Agent
 
 ## What this project is
-A fire-and-forget Python agent that automates a "repost / brainrot Shorts" YouTube channel. It searches YouTube by keyword, finds the most viral moments in long-form videos, reformats them as 1080×1920 Shorts (split-screen with looping background gameplay + word-by-word burned subtitles), and uploads 2–6/day to a single YouTube channel on a fixed cadence.
+A fire-and-forget Python agent that automates a "movie clip Shorts" YouTube channel. It searches YouTube by keyword for movie-clip reuploader videos, finds the most viral 30–60s moments, reformats them as 1080×1920 Shorts (full-screen original frame on a blurred background extension + word-by-word burned subtitles), and uploads 2–6/day to a single YouTube channel on a fixed cadence.
+
+**Content pivot 2026-05-04:** the channel was previously a "podcast/highlight + Subway gameplay split-screen" format. The pivot to movie clips drops the split-screen entirely, drops the gameplay rotation system, adds a YouTube-CC-first transcript path, and acknowledges meaningfully higher copyright-strike risk. See `progress.md` Pivot.0–Pivot.5 for the rewrite checklist and the plan archive in `.claude/plans/` for the full pivot rationale.
 
 ## Scope (v1)
 - **Source:** third-party long-form videos, transformatively reformatted.
@@ -16,16 +18,18 @@ A fire-and-forget Python agent that automates a "repost / brainrot Shorts" YouTu
 ## Stack
 Python 3.11+ · ffmpeg+NVENC · yt-dlp · faster-whisper (CUDA) · YouTube Data API v3 · Ollama (`qwen2.5:3b-instruct`, local) · Windows Task Scheduler · SQLite. See `skills.md` for the full rationale. **Cost: $0/month.**
 
-## Architecture in one diagram (v1.1)
+## Architecture in one diagram (v1.2 — post-content-pivot)
 ```
 [Windows Task Scheduler — weekly]
    └─ weekly_run.py:
-        keywords → discovery (quota_ledger) → downloader → lang_detect
-                → selector (Whisper + heatmap-or-fallback + Ollama qwen2.5:3b)
-                → policy_gate (banlist / profanity / NSFW / hook-sanity)
-                → editor (ffmpeg + NVENC + ASS karaoke) → output/pending/{date}__{slot}__{slug}.mp4
-                → quality_screen (speech density, sub-conf, pHash + audio dedup)
-                → slot_planner (TZ-aware, publish_at_utc)
+        keywords → discovery (quota_ledger) → downloader (mp4 + json3 caption sidecars)
+                → lang_detect → captions (yt-dlp CC parse → cached JSON v2)
+                → selector (caption-first reuse OR Whisper fallback + heatmap-or-fallback + Ollama qwen2.5:3b)
+                → policy_gate (banlist / profanity / NSFW / hook-sanity / topic_filter)
+                → editor (ffmpeg + NVENC + split + gblur + overlay + ASS karaoke)
+                  → output/pending/__unscheduled__{clip_id}__{slug}.mp4
+                → quality_screen (speech density, sub-conf, pHash + audio dedup, loudness)
+                → slot_planner (TZ-aware, publish_at_utc) → renames to {date}__slot_{HHMM}__{slug}.mp4
                 → retention (cleanup + VACUUM)
 [user, ad-hoc]  drag from output/pending/ → output/approved/  (only while human_review=true)
 
@@ -33,7 +37,7 @@ Python 3.11+ · ffmpeg+NVENC · yt-dlp · faster-whisper (CUDA) · YouTube Data 
    └─ daily_upload.py:
         files in output/approved/ (or output/pending/ if human_review=false) with publish_at_utc ∈ today
                 → policy_gate (re-check)
-                → uploader (videos.insert + publishAt, --dry-run aware) → YouTube
+                → uploader (videos.insert + publishAt, orphan-marker fence, --dry-run aware) → YouTube
                                   ↑
                           state.db (SQLite)
                                   ↑
@@ -63,20 +67,21 @@ Each stage is independent and idempotent, communicating via the SQLite state sto
 
 ## Decisions already locked
 - Engagement signal = YouTube `mostReplayed` heatmap + transcript-driven LLM ranking (local Ollama `qwen2.5:3b-instruct`, JSON-mode, fixed rubric prefix).
-- Vertical layout = top half source video (face/center crop), bottom half random-seeked gameplay loop.
-- Subtitles = karaoke-style word-by-word, burned via ASS + libass.
+- Vertical layout (post-pivot) = full-screen movie clip on a blurred-background extension. Foreground 1080×608 (preserves the 16:9 frame, no edge crop), background = the same source scaled-to-cover + gaussian-blur (sigma=20). No split-screen; no gameplay.
+- Subtitles = karaoke-style word-by-word, burned via ASS + libass. Position: `\pos(540, 1500)` (~78% down) so they sit clear of the centered 16:9 foreground band.
+- Transcripts (post-pivot) = YouTube CC track preferred when available (manual word-level via JSON3 → skip Whisper); auto/line-interp captions fall back to Whisper. Schema_version=2 with `timing_source` and per-word `confidence_source`.
 - Default cadence: 4 clips/day × 7 days = 28 clips/week. Configurable via `clips_per_day` and `days_per_run`.
 - 4/day stays well under the 10k-unit/day quota (4 × 1,600 = 6,400 units, 1,000-unit headroom).
-- A separate `gameplay_cursor` table persists the round-robin position across the Subway/Minecraft/GTA pool.
+- `gameplay_cursor` and `gameplay_pointer` tables retained in `schema.sql` for backward compat but DEPRECATED post-pivot — no code reads or writes them.
 
 ## Hardware (locked)
 - Windows PC: i9-11900H, 32 GB DDR4, 1 TB SSD, RTX 3070 laptop GPU (8 GB VRAM).
 - Whisper: `large-v3` int8_float16 on CUDA. Render: `h264_nvenc`.
 
 ## Content inputs (locked)
-- **Keywords:** Joe Rogan, stoicism, NBA highlights — all three rotated.
-- **Background gameplay:** Subway Surfers, Minecraft parkour, GTA — one ~10 min file each.
-- **Gameplay rotation:** round-robin across the three files, each clip consumes the next sequential segment from its file's cursor; wrap to 0 when a file is exhausted. Cursor persisted in `gameplay_cursor` table.
+- **Keywords (post-pivot):** "best movie scenes", "iconic movie moments", "movie clips 4k" — rotated. Old keywords (Joe Rogan / stoicism / NBA highlights) are archived; the existing 156 downloaded videos are inert (different keyword) and will age out via Phase 7 retention.
+- **Background:** none — full-screen pivot, source video covers the entire frame on a blurred extension of itself. No gameplay pool, no rotation.
+- **Caption sources:** yt-dlp manual captions (preferred) → yt-dlp auto-captions → Whisper fallback. See agents.md §3 for the decision rule.
 
 ## Locked decisions (post-redesign)
 - **Stack is fully free.** Anthropic API removed. Local LLM via **Ollama** (`qwen2.5:3b-instruct`, q4_K_M ≈ 2 GB VRAM) handles ranking, NSFW classification, and hook-sanity checks. Runs alongside Whisper on the 8 GB RTX 3070.
@@ -95,4 +100,9 @@ Each stage is independent and idempotent, communicating via the SQLite state sto
 - No code written until the user confirms the plan.
 
 ## Risk acknowledgement
-This channel format carries copyright-strike risk. The user has acknowledged this. Mitigations: short clips, transformative format (split-screen + subtitles + reframing), source attribution in description.
+This channel format carries **elevated** copyright-strike risk after the movie-clip pivot. Major studios (Disney/WB/Universal) operate aggressive Content ID + manual takedown teams; transformative-format defense (short clip + reframe + burned subtitles) is **weak** against first-party studio content. The user has acknowledged this via `cfg.copyright_acknowledgement="movie_clips_v1"`. Mitigations:
+- Short clips (≤60 s, enforced).
+- Transformative format: full-screen + blurred-bg extension + burned subtitles + reframing to 9:16 (preserves the original 16:9 inside the 9:16 frame).
+- Heavy source attribution in upload description (`Source: <url>` + `Original channel: <name>`).
+- **Recommended ops mitigation:** run the first 2–3 weeks against a separate test channel before pointing OAuth at production.
+- Prefer older / cult / international films when curating keyword variants.

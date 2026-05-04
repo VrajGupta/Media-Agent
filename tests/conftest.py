@@ -49,13 +49,21 @@ class StubConfig:
     class _Paths:
         def __init__(self, raw_dir: str, logs_dir: str, state_db: str,
                      transcripts_dir: str = "", pending_dir: str = "",
-                     rejected_dir: str = ""):
+                     rejected_dir: str = "",
+                     # Phase 5
+                     approved_dir: str = "", dry_run_dir: str = "",
+                     orphans_dir: str = "", oauth_token: str = ""):
             self.raw_dir = raw_dir
             self.logs_dir = logs_dir
             self.state_db = state_db
             self.transcripts_dir = transcripts_dir
             self.pending_dir = pending_dir
             self.rejected_dir = rejected_dir
+            # Phase 5
+            self.approved_dir = approved_dir
+            self.dry_run_dir = dry_run_dir
+            self.orphans_dir = orphans_dir
+            self.oauth_token = oauth_token
 
     def __init__(
         self,
@@ -86,6 +94,9 @@ class StubConfig:
         dedup_lookback_days: int = 90,
         phash_min_hamming: int = 8,
         ollama_model: str = "qwen2.5:3b-instruct",
+        # Phase 5 — uploader knobs.
+        videos_insert_unit_cost: int = 1600,
+        youtube_quota_ceiling_units: int = 9000,
     ):
         self.disk_soft_cap_gb = soft_cap_gb
         self.disk_hard_cap_gb = hard_cap_gb
@@ -112,6 +123,9 @@ class StubConfig:
         self.dedup_lookback_days = dedup_lookback_days
         self.phash_min_hamming = phash_min_hamming
         self.ollama_model = ollama_model
+        # Phase 5
+        self.videos_insert_unit_cost = videos_insert_unit_cost
+        self.youtube_quota_ceiling_units = youtube_quota_ceiling_units
         from pathlib import Path
         self.project_root = Path(tmp_path)
         raw = tmp_path / "raw"
@@ -119,13 +133,22 @@ class StubConfig:
         transcripts = tmp_path / "transcripts"
         pending = tmp_path / "output" / "pending"
         rejected = tmp_path / "output" / "rejected"
-        for d in (raw, logs, transcripts, pending, rejected):
+        # Phase 5
+        approved = tmp_path / "output" / "approved"
+        dry_run = tmp_path / "output" / "dry_run"
+        orphans = tmp_path / "output" / "orphans"
+        for d in (raw, logs, transcripts, pending, rejected,
+                  approved, dry_run, orphans):
             d.mkdir(parents=True, exist_ok=True)
         self.paths = self._Paths(
             str(raw), str(logs), str(tmp_path / "state.db"),
             transcripts_dir=str(transcripts),
             pending_dir=str(pending),
             rejected_dir=str(rejected),
+            approved_dir=str(approved),
+            dry_run_dir=str(dry_run),
+            orphans_dir=str(orphans),
+            oauth_token=str(tmp_path / "oauth_token.json"),
         )
 
     def abs_path(self, rel: str):

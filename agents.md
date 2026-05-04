@@ -32,10 +32,15 @@ Threshold to enter selection: `virality_score ≥ 1.0`.
 
 ## 3. `selector/` — Clip Selector
 **Job:** Pick the 1–3 most viral 30–60s windows in each downloaded video.
-**Inputs:** `data/raw/{video_id}.mp4`, transcript, optional `mostReplayed` heatmap.
+**Inputs:** `data/raw/{video_id}.mp4`, transcript (caption-first OR Whisper), optional `mostReplayed` heatmap.
 **Outputs:** rows in `clips` table (`clip_id`, `video_id`, `start_s`, `end_s`, `hook`, `suggested_title`, `selection_method` (`heatmap_aided` | `transcript_only`), `publish_at_utc` (filled later by slot planner), `status='selected'`).
 **Sub-steps:**
-- `transcriber.py` — faster-whisper → word-level JSON, cached to `data/transcripts/`.
+- `captions/` (Pivot.1, runs before this stage) — yt-dlp CC fetcher writing `data/transcripts/{video_id}.json` (schema v2, `timing_source`+`confidence_source`). Manual word-level captions are reused without ASR; auto/line-interp captions trigger Whisper fallback in `transcriber.py`.
+- `transcriber.py` — caption-first cache reuse via `timing_source` switch:
+  - `timing_source='whisper'` AND model matches cfg → reuse cache.
+  - `timing_source='manual_word_level'` → reuse cache, skip Whisper. (Speed win.)
+  - `timing_source='auto_word_level'` AND mean placeholder confidence ≥ `cfg.caption_min_confidence` (0.7) → reuse cache.
+  - `timing_source='manual_line_interp' | 'auto_line_interp'` → re-transcribe with Whisper (faster-whisper large-v3 int8_float16 on CUDA), overwriting the cache.
 - `heatmap.py` — fetch `mostReplayed` markers; **fallback validation**: if per-run `heatmap_hit_rate < 70%`, append a warning row to `logs/alerts.md`. First 2 weeks: manual spot-check 5+5 transcript-only vs heatmap-aided clips/week to bound quality gap ≤ 1.0/5.
 - `ranker.py` — local Ollama (`qwen2.5:3b-instruct`) w/ JSON-mode output and a fixed rubric prefix (kv-cache reused across calls): hook strength, payoff, self-contained, controversy/curiosity, no slow intro.
 
@@ -49,21 +54,20 @@ Threshold to enter selection: `virality_score ≥ 1.0`.
 **Failure:** writes `clips.rejection_reason`, status → `rejected_policy`. Not rendered, not uploaded.
 **Config knob:** `human_review: true` (default for first 2 weeks) → rendered clips land in `output/pending/`; user must manually move to `output/approved/` before `daily_upload` will publish them. `human_review: false` → uploader treats `output/pending/` as the publish queue directly.
 
-## 4. `editor/` — Vertical Reformat & Subtitle Burner
+## 4. `editor/` — Full-Screen Reformat & Subtitle Burner (post-pivot)
 **Job:** Render the final 1080×1920 Short.
-**Inputs:** clip row + raw video + word-timed transcript + the next gameplay segment from the rotation pool.
-**Outputs:** `output/pending/{YYYY-MM-DD}__{slot_HHMM}__{title_slug}.mp4` (slug = lowercased alphanumeric+underscore from suggested title, ≤80 chars); status → `rendered`. Filename is self-describing so the user can review without opening the DB.
-**Crop:** **center crop** to 1080×960 in v1 (subject-tracking deferred to Phase 8).
-**Pipeline (single ffmpeg invocation where possible):**
-1. Extract clip segment.
-2. Build top pane: scale + crop source to 1080×960.
-3. Build bottom pane: seek into the next gameplay segment per rotation rule, scale/crop to 1080×960.
-2a. Top pane: center-crop to 1080×960.
-4. Vstack → 1080×1920 @ 30fps.
-5. Mix source audio (full) + gameplay audio (muted).
-6. Burn ASS subtitle file with word-by-word highlight (one or two words on screen, big bold white + black stroke, centered ~70% down).
-7. Loudness normalize via `loudnorm` filter.
-8. Encode with `h264_nvenc` (NVIDIA RTX 3070) — `-preset p5 -cq 23`.
+**Inputs:** clip row + raw video + word-timed transcript. **No gameplay** (dropped in pivot).
+**Outputs:** `output/pending/__unscheduled__{clip_id}__{title_slug}.mp4` (slug = lowercased alphanumeric+underscore from suggested title, ≤80 chars + 4-char sha1 suffix). Phase 6 slot_planner renames in place to `{YYYY-MM-DD}__slot_{HHMM}__{title_slug}.mp4`. Status → `rendered`.
+**Strategy:** `cfg.render_strategy="blurred_bg"` — full-screen original frame on a blurred-background extension of itself. Foreground 1080×608 (16:9 inside 1080 width), centered on a 1080×1920 blurred-cover background. Preserves the entire 16:9 frame (no edge crop). Center-crop and letterbox modes available as alternatives; subject tracking deferred to Phase 8.
+**Pre-render audio probe (NEW):** `ffprobe -v error -select_streams a -show_entries stream=codec_type` — empty output → `rejected_render: no_audio_stream`. Movie clips without audio are not viable for this format.
+**Pipeline (single ffmpeg invocation):**
+1. `[0:v] split=2 [src1][src2]` — duplicate the source video stream.
+2. `[src1] scale=1080:1920:force_original_aspect_ratio=increase, crop=1080:1920, gblur=sigma=20 → [bg]` — cover-fit background, gaussian-blurred.
+3. `[src2] scale=1080:608:force_original_aspect_ratio=decrease → [fg]` — fitted foreground, full 16:9 frame preserved.
+4. `[bg][fg] overlay=(W-w)/2:(H-h)/2 → [comp]` — center-overlay foreground on background.
+5. `[comp] fps=30 → [v30] → ass='<escaped>' → [vsub]` — burn ASS karaoke subtitles at `\pos(540, 1500)` (~78% down).
+6. `[0:a] loudnorm=I=-14:LRA=11:TP=-1.0,aresample=48000 → [a]` — source audio loudnorm'd; no gameplay audio to mix.
+7. Encode with `h264_nvenc` (NVIDIA RTX 3070) — `-preset p5 -cq 23 -movflags +faststart`.
 
 ## 4.5. `quality_screen/` — Content Quality Screen (NEW)
 **Job:** Block low-quality or duplicate output before it enters the upload queue.
@@ -78,16 +82,20 @@ Threshold to enter selection: `virality_score ≥ 1.0`.
 **Job:** Convert Whisper word timestamps into a karaoke-style `.ass` file.
 **Style:** Impact/Anton font, ~120pt, white fill, 8px black border, yellow highlight on the active word.
 
-## 6. `uploader/` — YouTube Uploader
-**Job:** Publish a `rendered` clip to YouTube as a Short with a future `publishAt`.
+## 6. `uploader/` — YouTube Uploader (PAUSED post-pivot; see Pivot.6)
+**Status:** Phase 5 plan was drafted (orphan-marker fence, pre-upload re-check, etc.) but is paused while the content pivot lands. Resumes after Pivot.5 produces fresh movie-clip `quality_pass` clips. The uploader code is content-agnostic — only title/description/tag templating needs movie-clip semantics.
+**Job:** Publish a `quality_pass` (or `approved`) clip to YouTube as a Short with a future `publishAt`.
 **Inputs:** When `human_review=true`: file in `output/approved/`. When `false`: file in `output/pending/`. Plus clip metadata + `publish_at_utc` timestamp.
 **Outputs:** uploaded video (private, scheduled); status → `uploaded`; `youtube_video_id` + confirmed `publish_at` stored.
-**Insert body:** `status.privacyStatus=private`, `status.publishAt=<ISO UTC>`, `selfDeclaredMadeForKids=false`.
+**Insert body:** `status.privacyStatus=private`, `status.publishAt=<ISO UTC, Z-suffix>`, `selfDeclaredMadeForKids=false`, `categoryId=24`.
 **Auth:** OAuth refresh token cached at `data/oauth_token.json`.
-**Title rule:** `{hook} #Shorts` (≤100 chars). Description: hook + source attribution line + niche hashtags.
+**Title rule (post-pivot):** `{hook} #Shorts` (≤100 chars), where `hook` for movie clips is the iconic line / scene moniker.
+**Description (post-pivot):** `{hook}\n\nSource: https://youtube.com/watch?v={video_id}\nOriginal channel: {channel}\n\n#Shorts #{keyword_slug}`.
+**Tags (post-pivot):** `[<keyword>, "shorts", "movie", "movieclip"]`.
 **Quota guard:** queries `quota_ledger`; refuses upload if next call would push today's units > 9,000.
 **Future-too-near rule:** if `publish_at_utc < now + 20 min`, pad to `now + 20 min` (YouTube rejects past or near-future timestamps).
 **Dry-run mode (`--dry-run`):** writes the would-be insert body to `output/dry_run/{clip_id}.json`, makes no API call.
+**Orphan-marker fence (Phase 5 plan):** writes `output/orphans/{clip_id}.json` after API success; runner-startup scan aborts with exit 4 if a marker is inconsistent with DB state. Ensures duplicate-upload safety even on partial DB-write failures.
 
 ## 6.5. `quota_ledger/` — Per-Endpoint Quota Tracker (NEW)
 **Job:** Prevent silent quota overruns.
@@ -139,28 +147,30 @@ SQLite at `data/state.db`. Tables: `videos`, `clips`, `uploads`, `runs`, `gamepl
 **Per-run summary:** appended to `logs/runs.md` (date, keyword, candidates, rendered, dropped-by-reason, uploaded, quota_used).
 **Filesystem-as-signal:** counts of files in `output/pending/` vs `output/approved/` are themselves a queue-depth signal the user can see in Explorer.
 
-## Data Flow (v1.1)
+## Data Flow (v1.2 — post-content-pivot)
 ```
 keywords → [discovery] (quota_ledger metered) → videos table
                               ↓
-                        [downloader] → data/raw/*.mp4
+                        [downloader] → data/raw/*.mp4 + caption sidecars (json3)
                               ↓
                        [lang_detect] (rejects non-en)
                               ↓
-                         [selector] (heatmap-or-fallback + Haiku ranker) → clips table (+ transcripts)
+                        [captions] (Pivot.1: yt-dlp CC parse → cached transcript v2)
                               ↓
-                       [policy_gate] (banlist, profanity, NSFW, hook-sanity)
+                         [selector] (caption-first reuse OR Whisper fallback + heatmap + Ollama ranker) → clips table
                               ↓
-                          [editor] (ffmpeg + NVENC + ASS karaoke) → output/pending/*.mp4
+                       [policy_gate] (banlist, profanity, NSFW, hook-sanity, topic_filter)
                               ↓
-                     [quality_screen] (speech density, sub-conf, pHash + audio dedup)
+                          [editor] (ffmpeg split+gblur+overlay+ASS karaoke) → output/pending/__unscheduled__*.mp4
                               ↓
-                      [slot_planner] (TZ-aware) → clips.publish_at_utc filled
+                     [quality_screen] (speech density, sub-conf, pHash + audio dedup, loudness)
+                              ↓
+                      [slot_planner] (TZ-aware) → clips.publish_at_utc + filename rename
                               ↓
                        [retention] (cleanup + VACUUM)
                               ↓
    (Windows Task Scheduler — daily) → [daily_upload] →
-                       [policy_gate] (re-check) → [uploader] (quota_ledger metered, --dry-run aware) → YouTube (scheduled)
+                       [policy_gate] (re-check) → [uploader] (quota_ledger metered, orphan-marker fence, --dry-run aware) → YouTube (scheduled)
                               ↑
               [observability] (loguru → logs/agent.log + logs/alerts.md) ← every stage
 ```

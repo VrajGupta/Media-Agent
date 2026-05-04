@@ -9,10 +9,12 @@ upload_slots: ["09:00", "13:00", "17:00", "21:00"]   # canonical timezone (below
 timezone: "Asia/Singapore"
 
 # --- Discovery ---
+# Content pivot 2026-05-04: movie-clip reupload format. Old keywords archived in
+# CLAUDE.md history. Niche baseline resets on first weekly run (cold start safe).
 keywords:
-  - "Joe Rogan"
-  - "stoicism"
-  - "NBA highlights"
+  - "best movie scenes"
+  - "iconic movie moments"
+  - "movie clips 4k"
 search_max_results_per_keyword: 50                    # maxResults per search.list page (API caps at 50)
 discovery_max_inspected_per_keyword: 200              # total UNIQUE IDs to fetch via pagination
 discovery_min_interval_hours: 6                       # cooldown for the idempotency guard
@@ -35,6 +37,10 @@ clip_min_seconds: 30
 clip_max_seconds: 60
 clips_per_video: 2
 selector_max_candidates: 25                            # cap windows passed to Ollama; long videos can produce 200+ baseline windows which overwhelm qwen2.5:3b
+
+# --- Captions (Pivot.1 — caption-first transcript path) ---
+caption_min_confidence: 0.7                            # auto-caption mean placeholder confidence below this triggers Whisper fallback
+caption_prefer_manual: true                            # try manual track first; fall back to auto, then Whisper
 
 # --- Policy ---
 human_review: true                                    # locked true for first 2 weeks
@@ -59,19 +65,17 @@ download_min_height: 720                              # reject anything below
 download_max_height: 1080                             # ceiling; yt-dlp picks 1080 when available
 download_estimated_bytes_per_video: 524288000         # 500 MB; fallback when probe lacks filesize
 
-# --- Render ---
+# --- Render (Pivot.3 — full-screen blurred-bg, replaces split-screen) ---
 output_resolution: [1080, 1920]
-top_pane_height: 960
-bottom_pane_height: 960
+render_strategy: "blurred_bg"                          # blurred_bg | center_crop | letterbox
+blurred_bg_sigma: 20                                   # gblur sigma when render_strategy=blurred_bg
+source_pane_aspect: "16:9"                             # for blurred_bg overlay sizing (1080:608 fg pane)
 nvenc_preset: "p5"
 nvenc_cq: 23
 loudness_target_lufs: -14.0
 
-# --- Gameplay rotation ---
-gameplay_pool:
-  - "data/gameplay/subway.mp4"
-  - "data/gameplay/minecraft.mp4"
-  - "data/gameplay/gta.mp4"
+# --- Copyright (movie clips have higher strike risk than podcasts) ---
+copyright_acknowledgement: "movie_clips_v1"            # explicit ack of pivot risk; bootstrap --check warns if absent
 
 # --- Quota ---
 youtube_quota_daily_units: 10000
@@ -99,6 +103,7 @@ paths:
   approved_dir: "output/approved"
   rejected_dir: "output/rejected"
   dry_run_dir: "output/dry_run"
+  orphans_dir: "output/orphans"                       # Phase 5 orphan-marker fence; cleaned up on happy path
   logs_dir: "logs"
   oauth_token: "data/oauth_token.json"
   client_secrets: "data/client_secret.json"

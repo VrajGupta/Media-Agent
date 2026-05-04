@@ -331,15 +331,143 @@ Split across:
 7. **Sanity SQL:** `sqlite3 data/state.db "SELECT status, COUNT(*) FROM clips GROUP BY status;"` should show `policy_pass + rejected_policy ≈ 296` after the gate sweep.
 8. **Acceptance gates:** sample 20 distinct clips through quality_screen → 0 dedup false-positives; sample 5 known near-duplicate pairs → 5/5 caught.
 
-## Phase 5 — Uploader
-- [ ] OAuth refresh-token loader
-- [ ] `uploader/youtube.py` resumable insert with `status.privacyStatus=private` + `status.publishAt`
-- [ ] `--dry-run` mode writes insert body to `output/dry_run/{clip_id}.json`, no API call
-- [ ] Future-too-near rule: pad `publish_at_utc` < `now + 20 min` → `now + 20 min`
-- [ ] Quota ledger pre-flight (abort if next call > 9,000 units today)
-- [ ] Title/description/tag templating (`#Shorts`, `categoryId=24`, `selfDeclaredMadeForKids=false`)
-- [ ] CLI: `python -m src.uploader --clip-id <id> [--dry-run]`
-- [ ] **Acceptance:** `--dry-run` produces a valid insert body offline; one real upload to test channel publishes at exactly the requested `publishAt` in canonical TZ.
+## Phase 4.6 — Content Pivot (movie clips, full-screen) — IN PROGRESS
+
+> Triggered 2026-05-04: pivot from "podcast/highlight + Subway gameplay split-screen" to "full-screen movie-clip Shorts with caption-first transcripts." See `.claude/plans/you-are-continuing-work-groovy-kitten.md` for the full pivot rationale and the Phase 5 plan archive.
+
+### Pivot.0 — Config + memory updates (no Whisper / ffmpeg work)
+- [x] `config.yaml` — keywords flipped to movie-clip starter set; removed `gameplay_pool` / `top_pane_height` / `bottom_pane_height`; added `render_strategy: blurred_bg`, `blurred_bg_sigma: 20`, `source_pane_aspect: "16:9"`, `caption_min_confidence: 0.7`, `caption_prefer_manual: true`, `copyright_acknowledgement: "movie_clips_v1"`.
+- [x] `src/config_loader/loader.py` — typed fields with pydantic Literal + range validation: `render_strategy`, `blurred_bg_sigma ∈ [0, 100]`, `source_pane_aspect`, `caption_min_confidence ∈ [0.0, 1.0]`, `caption_prefer_manual`, `Optional[copyright_acknowledgement]`. Removed `top_pane_height` / `bottom_pane_height` / `gameplay_pool`.
+- [x] `tests/test_config_loader.py` — 4 new tests (valid blurred_bg loads, invalid render_strategy rejected, out-of-range caption_min_confidence rejected, missing copyright_acknowledgement loads as None). All 4 passing.
+- [x] `CLAUDE.md` — pivot context: project description, v1.2 architecture diagram with captions+blurred-bg, content-inputs section (new keywords, no gameplay), elevated risk acknowledgement.
+- [x] `agents.md` — §3 selector with caption-first sub-step + `timing_source` decision rule, §4 editor full-screen blurred-bg pipeline + audio probe, §6 uploader marked paused with movie-clip metadata notes, data-flow diagram updated.
+- [x] `plan.md` — Phase 4.6 inserted; Phase 4 description rewritten for blurred-bg; Phase 5 marked PAUSED.
+- [x] `progress.md` — this section.
+- [x] `pytest tests/` — 279 passing post-Pivot.0 (275 prior + 4 new config tests).
+- [ ] **Acceptance:** all four memory files reviewed; no live behavior changes yet.
+
+### Pivot.1 — `src/captions/` (CC fetcher) — NOT STARTED
+- [ ] `src/captions/fetcher.py` — yt-dlp `--write-sub --write-auto-sub --sub-langs en --sub-format json3` invocation; sidecar reuse from Phase 2 `data/raw/{video_id}.<lang>.<ext>`.
+- [ ] `src/captions/parsers/{json3,vtt,srt}.py` — JSON3 word-level (gold path), VTT/SRT line-level + linear interp.
+- [ ] `src/captions/schema.py` — schema_version=2 with `timing_source` + per-word `confidence_source`.
+- [ ] `src/captions/runner.py` + `__main__.py` — `python -m src.captions [--video-id] [--force] [--dry-run]` CLI.
+- [ ] `src/downloader/ytdlp_runner.py` — request `--sub-format json3` for sidecars (two-line update).
+- [ ] `src/quality_screen/confidence.py` — `confidence_source` switch (asr → use probability; manual_attestation → bypass; interp → fail).
+- [ ] `src/state/schema.sql` — comment `captions_fetched` on `videos.status` enum; bump transcript schema docs to v2.
+- [ ] Tests: `tests/test_captions_json3.py` (7), `test_captions_vtt.py` (4), `test_captions_srt.py` (3), `test_captions_runner.py` (7), `test_quality_confidence.py` (3 new). 24 total.
+- [ ] **Acceptance:** ~24 new tests passing; live single-video fetch on a manual-caption video produces schema_v2 cache; idempotent re-run <2 s.
+
+### Pivot.2 — Selector transcriber update — NOT STARTED
+- [ ] `src/selector/transcriber.py::load_cache` — `timing_source` switch: whisper-match reuses; manual_word_level reuses (skips Whisper); auto_word_level + high conf reuses; line-interp triggers Whisper.
+- [ ] Schema_version=1 backward compat: legacy Whisper transcripts treated as `timing_source='whisper', confidence_source='asr'`.
+- [ ] Tests: 3 new in `test_selector_transcriber.py` — manual_word_level reused without Whisper, auto_line_interp overwritten by Whisper, cache absent triggers Whisper.
+
+### Pivot.3 — Editor rewrite (drop gameplay) — NOT STARTED
+- [ ] `Grep` verification before deletion — confirm no references to gameplay symbols outside doomed files.
+- [ ] `src/editor/runner.py` — drop gameplay reservation/commit dance; collapse post-render tx to `set_clip_status` only.
+- [ ] `src/editor/ffmpeg_runner.py` — new filtergraph: `split=2` + `gblur=sigma=20` + `scale=1080:608` foreground + `overlay=(W-w)/2:(H-h)/2` + `ass=...`.
+- [ ] Pre-render audio probe — `ffprobe -select_streams a` empty → `rejected_render: no_audio_stream`.
+- [ ] `src/subtitles/ass_writer.py` — `\pos(540, 1500)` (~78% down).
+- [ ] DELETE `src/editor/gameplay.py` and `tests/test_editor_gameplay.py`.
+- [ ] DELETE `read_gameplay_pointer`, `read_gameplay_cursor`, `advance_gameplay_state` from `src/state/repository.py`.
+- [ ] `src/state/schema.sql` — `gameplay_cursor` / `gameplay_pointer` marked DEPRECATED (tables retained for backward compat, no code reads/writes).
+- [ ] REWRITE `tests/test_editor_ffmpeg.py` (~10 tests) and `tests/test_editor_runner.py` (~10 tests).
+- [ ] **Acceptance:** all editor tests passing; live single-clip render on a fresh movie-clip selection produces 1080×1920 H.264 mp4; visual QA confirms full original frame visible + blurred bg + lower-third subtitles.
+
+### Pivot.4 — Phase 4.5 banlist tune — NOT STARTED
+- [ ] Audit live `cfg.banlist` for movie-content false positives.
+- [ ] Sample 20 movie clips through `policy_gate --dry-run`; reject rate ≤ 30%.
+- [ ] Tune `profanity_max_score` if rejection rate > 30%.
+
+### Pivot.5 — Live keyword sweep + acceptance — NOT STARTED
+- [ ] Pivot.5 step 1–12 from the plan archive: bootstrap → discovery → downloader → lang_detect → captions → selector → policy_gate → editor → quality_screen → caption-reuse-rate measurement.
+- [ ] **Acceptance:** ≥5 movie-clip Shorts in `output/pending/` with new format; caption-reuse-rate ≥ 30% (recorded in this file); audio-rejection path exercised.
+
+## Phase 5 — Uploader — IMPLEMENTED (live verification pending)
+
+> Status flow: `quality_pass | approved → uploaded`; `quality_pass → rejected_policy` (pre-upload re-check fail). Built ahead of Pivot.1–5 per user direction; uploader code is content-agnostic so it'll work on the existing podcast-format rendered clip (`WHibDIQHeaY_31_65`) for the live acceptance test, then on movie-clip output once the pivot lands.
+
+### Module skeleton
+- [x] `src/uploader/__init__.py` re-exports `upload_one_clip`, `run_all`, `reconcile_orphans`, `UploadOutcome`, `UploadResult`.
+- [x] `src/uploader/__main__.py` — CLI: `--clip-id`, `--dry-run`, `--publish-at`, `--config`. Lazy OAuth (`build_youtube_client` only constructed in real-upload mode). Exit codes: 0=ok, 1=db missing, 2=clip not found, 3=invalid --publish-at, 4=orphan_reconcile_required.
+- [x] `src/uploader/runner.py` — `upload_one_clip`, `run_all`, `reconcile_orphans`. `UploadOutcome` enum.
+- [x] `src/uploader/publish_at.py` — pure `pad_publish_at(publish_at_utc, now, lead_minutes=20)` and `format_publish_at_iso_z(dt)`. Strict `<` comparison; naive datetimes raise.
+- [x] `src/uploader/templater.py` — pure `build_title` (≤100 chars, word-boundary truncate keeping `#Shorts`), `build_description` (hook + source URL + channel + niche hashtag), `build_tags` (deduped, ≤500-char joined budget).
+- [x] `src/uploader/insert_body.py` — pure `build_insert_body(clip_row, video_row, padded_publish_at_utc)`. `categoryId=24`, `privacyStatus=private`, `publishAt` Z-suffix only, `selfDeclaredMadeForKids=False`, `defaultLanguage=en`.
+- [x] `src/uploader/resumable.py` — `do_resumable_upload(youtube, ledger, body, file_path, *, units)` with `request.next_chunk()` loop (NOT `.execute()` — undefined for resumable=True). Single quota call site; conservative ledger: HttpError records, ConnectionError/timeout don't.
+- [x] `src/uploader/orphan_marker.py` — `write_marker`, `read_marker`, `unlink_marker`, `scan_orphans`, `db_is_consistent_with_marker`. Atomic tmp+os.replace writes; tmp files starting with `.` skipped by scan.
+
+### Persistence — orphan-marker fence + ID-first two-step
+- [x] **Step 10-pre:** `write_marker(...)` BEFORE any DB write after API success. If marker write fails, alert + return error_persist_failed; runner aborts.
+- [x] **Step 10a:** narrow `repo.tx()` writing `youtube_video_id` only via `repo.set_clip_youtube_id(...)`. If this raises, marker survives → next run's reconcile_orphans aborts with exit 4. **No double upload possible.**
+- [x] **Step 10b:** wider `repo.tx()` setting status='uploaded' + publish_at_utc + upserting `uploads` row via `repo.upsert_upload(...)`. Failure here is also covered by the marker.
+- [x] **Step 10-post:** best-effort `unlink_marker(...)`. Failure logged but not fatal — next run's scan finds DB-consistent marker and silently cleans up.
+
+### Runner-startup orphan reconcile gate
+- [x] `reconcile_orphans(repo, cfg)` scans `output/orphans/`. For each marker:
+  - DB consistent (status='uploaded' AND yt_id matches AND uploads row exists) → silent unlink, continue.
+  - DB inconsistent → return `(False, alerts)`. `run_all` and the CLI both abort; CLI exits 4.
+- [x] Reconcile runs BEFORE clip processing — poisoned state never lets a partial re-upload happen.
+
+### Pre-upload policy re-check
+- [x] Reuses `policy_gate.evaluator.evaluate_clip_policy(cfg, clip_text, recheck_title, ollama_host=...)`.
+- [x] `recheck_title = clip.hook or clip.suggested_title` — matches `templater.build_title`'s input so re-check evaluates the actual upload title.
+- [x] Infra-fail (Ollama unreachable / malformed output) → leave at `quality_pass`, alert. Never reject content because of a flaky model.
+- [x] Content-fail with `youtube_video_id IS NULL` → flip `quality_pass → rejected_policy` with reason. **Skipped in dry-run** (no DB write).
+- [x] Ordering: re-check runs BEFORE the dry-run JSON emission, so a failing dry-run reports `rejected_policy_recheck` and writes NO file.
+
+### Dry-run isolation
+- [x] No API call (`youtube.videos().insert(...).next_chunk` never invoked).
+- [x] No DB writes.
+- [x] No OAuth refresh — CLI doesn't construct `build_youtube_client` in dry-run mode.
+- [x] `--publish-at` value is used in-memory to build the body but is NOT persisted to clips.publish_at_utc.
+- [x] Atomic JSON write to `output/dry_run/{clip_id}.json` via tmp + os.replace.
+
+### Quota ledger — single source of truth
+- [x] `do_resumable_upload` is the only site that calls `ledger.check_or_raise` and `ledger.record` for `videos.insert`.
+- [x] Conservative recording: HttpError records; ConnectionError/socket.timeout don't. Matches Phase 1 contract.
+- [x] Runner catches `QuotaExceeded` → `quota_exceeded` outcome, alert, batch hard-stops.
+
+### Repository helpers added
+- [x] `repo.set_clip_youtube_id(clip_id, youtube_video_id)` — narrow critical-section update.
+- [x] `repo.upsert_upload(...)` — explicit `INSERT ... ON CONFLICT(clip_id) DO UPDATE` (preserves `uploaded_at` on retry; not `INSERT OR REPLACE`).
+- [x] `repo.clips_for_upload()` — quality_pass/approved with non-null publish_at_utc and null youtube_video_id, ordered by publish_at_utc ASC.
+- [x] `repo.get_clip_with_video(clip_id)` — joined videos+clips for templater (v_video_id / v_channel / v_keyword aliases).
+
+### Config + paths
+- [x] `config.yaml` — added `paths.orphans_dir: "output/orphans"`.
+- [x] `src/config_loader/loader.py` — added `Paths.orphans_dir` field with default for backward compat.
+- [x] `.gitignore` — added `output/orphans/*.json`.
+
+### Tests — 48 new (327 total: 279 prior + 48 Phase 5)
+- [x] `tests/test_uploader_publish_at.py` (7) — pad needed/not-needed/boundary, naive raises, idempotent repeat, format_iso_z Z-suffix, naive raises.
+- [x] `tests/test_uploader_templater.py` (7) — short hook, exactly 100 chars, truncate at word boundary keeping #Shorts, empty-hook fallback, description includes source+channel, tags lowercase+deduped+keyword-first, joined-tags ≤500 chars.
+- [x] `tests/test_uploader_insert_body.py` (6) — body shape snapshot, status locked fields, publishAt Z-only never +00:00, categoryId=24, defaultLanguage=en, hook in description.
+- [x] `tests/test_uploader_resumable.py` (5) — quota preflight raises before MediaFileUpload constructed, HttpError records ledger and reraises, ConnectionError no record, socket.timeout no record, success returns response.id and records.
+- [x] `tests/test_uploader_orphan_marker.py` (6) — write+read roundtrip, atomic no-leftover-tmp, scan skips malformed/.tmp/non-json, unlink missing returns True, db_consistent_when_db_reflects_upload, db_inconsistent matrix (no clip / quality_pass / no uploads row / yt_id mismatch).
+- [x] `tests/test_uploader_runner.py` (17) — already_uploaded skip (no API call), yt_id_set_on_quality_pass also skips, wrong_status skip, approved-dir basename fallback succeeds, missing output/publish_at/transcript errors, policy recheck rejection flips status (no API), recheck title input matches build_title, infra-fail soft, success writes marker+10a+10b+unlinks, **10a failure preserves marker → next run's reconcile aborts** (regression on next-run safety), future-too-near pad persists padded value, dry-run no DB / no API / no orphan, dry-run policy rejection emits no JSON (ordering regression), run_all filters to clips_for_upload only, orphan reconcile inconsistent aborts run_all + alert.
+
+### Acceptance
+- [x] `pytest tests/` — **327 passing** (279 prior + 48 Phase 5).
+- [x] All idempotency invariants:
+  - re-running a clip with `youtube_video_id` set → `skipped_already_uploaded`, no API call (regression test).
+  - `--dry-run` is fully offline: no API, no DB, no OAuth refresh, atomic JSON write.
+  - Quota ledger conservative: HttpError records, network errors don't (regression test).
+  - Pre-upload re-check fails-soft on Ollama infra failure.
+  - **10a failure with marker fence intact** → next run aborts with `orphan_reconcile_required` (end-to-end regression test).
+- [ ] **Live, post-merge:** `python -m src.uploader --dry-run --clip-id WHibDIQHeaY_31_65 --publish-at "<future ISO>"` produces valid insert body in `output/dry_run/`.
+- [ ] **Live, post-merge:** Real upload to test channel publishes at exactly the requested `publishAt`. `youtube_video_id` populated, `uploads` row inserted, `clips.status='uploaded'`, `quota_usage` row for `videos.insert` with units=1600, orphan marker cleaned up.
+- [ ] **Live, post-merge:** Idempotent re-run exits in <2 s with `skipped_already_uploaded`, no new quota row.
+- [ ] **Live, post-merge:** Synthetic orphan marker (`echo '{"clip_id":"v1_30_60",...}' > output/orphans/v1_30_60.json` then `python -m src.uploader`) → exit 4, alert appended, no clips processed.
+
+### Out of scope for Phase 5 (deferred per plan)
+- `slot_planner` and bulk `publish_at_utc` assignment — Phase 6.
+- Filename rename `__unscheduled__... → {date}__slot_{HHMM}__...` — Phase 6.
+- `daily_upload.py` orchestration (today-window filter, Task Scheduler) — Phase 6.
+- `tenacity` retry/backoff on transient HTTP errors — Phase 7.
+- Quota-increase audit form — operations task.
+- Thumbnail upload via `videos.update` — Phase 8.
+- Per-percent resumable progress reporting — chunksize=-1 means single-shot; deferred until file sizes warrant it.
 
 ## Phase 6 — Orchestrator (no daemon)
 - [ ] `slot_planner.py` — assigns `publish_at_utc` evenly across `days_per_run` × `upload_slots`; TZ-aware via `zoneinfo`
