@@ -46,6 +46,26 @@ class StubConfig:
     the exact knobs it needs.
     """
 
+    class _Retention:
+        def __init__(
+            self,
+            *,
+            raw_video: int = 14,
+            transcript: int = 90,
+            output_post_upload: int = 7,
+            rejected_clips: int = 30,
+            dup_hashes: int = 90,
+            quota_usage: int = 90,
+            vacuum_every_days: int = 30,
+        ):
+            self.raw_video = raw_video
+            self.transcript = transcript
+            self.output_post_upload = output_post_upload
+            self.rejected_clips = rejected_clips
+            self.dup_hashes = dup_hashes
+            self.quota_usage = quota_usage
+            self.vacuum_every_days = vacuum_every_days
+
     class _Paths:
         def __init__(self, raw_dir: str, logs_dir: str, state_db: str,
                      transcripts_dir: str = "", pending_dir: str = "",
@@ -97,6 +117,12 @@ class StubConfig:
         # Phase 5 — uploader knobs.
         videos_insert_unit_cost: int = 1600,
         youtube_quota_ceiling_units: int = 9000,
+        # Phase 6 — slot_planner / daily_upload knobs.
+        clips_per_day: int = 4,
+        days_per_run: int = 7,
+        upload_slots: list[str] | None = None,
+        timezone: str = "Asia/Singapore",
+        human_review: bool = True,
     ):
         self.disk_soft_cap_gb = soft_cap_gb
         self.disk_hard_cap_gb = hard_cap_gb
@@ -126,6 +152,15 @@ class StubConfig:
         # Phase 5
         self.videos_insert_unit_cost = videos_insert_unit_cost
         self.youtube_quota_ceiling_units = youtube_quota_ceiling_units
+        # Phase 6
+        self.clips_per_day = clips_per_day
+        self.days_per_run = days_per_run
+        self.upload_slots = upload_slots if upload_slots is not None else [
+            "09:00", "13:00", "17:00", "21:00",
+        ]
+        self.timezone = timezone
+        self.human_review = human_review
+        self.retention = self._Retention()
         from pathlib import Path
         self.project_root = Path(tmp_path)
         raw = tmp_path / "raw"

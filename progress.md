@@ -469,18 +469,109 @@ Split across:
 - Thumbnail upload via `videos.update` — Phase 8.
 - Per-percent resumable progress reporting — chunksize=-1 means single-shot; deferred until file sizes warrant it.
 
-## Phase 6 — Orchestrator (no daemon)
-- [ ] `slot_planner.py` — assigns `publish_at_utc` evenly across `days_per_run` × `upload_slots`; TZ-aware via `zoneinfo`
-- [ ] `weekly_run.py` — discovery → download → lang_detect → select → policy_gate → render → quality_screen → slot_plan → retention
-- [ ] `daily_upload.py` — pulls today's clips, re-runs policy_gate, uploads with `publishAt`, respects quota guard
-- [ ] Missed-slot recovery: stale `publish_at_utc` padded to `now + 20 min`, logged as `recovered_slot`, row appended to `logs/alerts.md`
-- [ ] `bootstrap.py` — single-clip end-to-end smoke test
-- [ ] `bootstrap.py --check` — env health check
-- [ ] Windows Task Scheduler XML exports under `scripts/` (`weekly_run.xml`, `daily_upload.xml`)
-- [ ] First full weekly run on the PC; verify queue depth = `clips_per_day × days_per_run`
-- [ ] First week of daily uploads; verify scheduled publish times honored
-- [ ] Missed-slot recovery exercised by deliberately skipping a day
-- [ ] **Acceptance:** weekly_run produces `clips_per_day × days_per_run` ready clips; daily_upload publishes correctly; missed-slot path verified.
+## Phase 6 — Orchestrator (no daemon) — IMPLEMENTED (live verification pending)
+
+> Status flow: `quality_pass` (publish_at_utc NULL) → slot_planner → `quality_pass` (publish_at_utc filled, file renamed) → user drags pending → approved → daily_upload's reconcile_approvals flips status → `approved` → upload_one_clip → `uploaded`. slot_planner does NOT change `clips.status`. The human-review gate is enforced at the SQL boundary via `clips_for_upload_due(statuses=...)` (`('approved',)` when human_review=True; both when False).
+
+### Module skeleton
+- [x] `src/slot_planner/__init__.py` re-exports `allocate_slots`, `SlotAssignment`, `slot_one_clip`, `run_all`, `reconcile_slot_renames`, `SlotOutcome`, `SlotResult`.
+- [x] `src/slot_planner/__main__.py` — CLI: `--clip-id`, `--force`, `--dry-run`, `--config`. Exit codes: 0=ok, 1=db missing, 2=clip-id not found.
+- [x] `src/slot_planner/allocator.py` — pure: `allocate_slots(clip_ids, now_local, upload_slots, days_per_run, clips_per_day, timezone_name, min_lead_minutes=20)`. Cap = `clips_per_day * days_per_run` (semantically correct expression vs. `len(upload_slots) * days_per_run`). Returns `(assignments, overflow)`. zoneinfo for DST correctness even though the canonical runtime path (Asia/Singapore) has no DST.
+- [x] `src/slot_planner/runner.py` — `slot_one_clip`, `run_all`, `reconcile_slot_renames`, `SlotOutcome`, `SlotResult`.
+- [x] `src/daily_upload.py` — orchestrator: `reconcile_approvals` + today-window filter + recovered_slot detection. Calls Phase 5's `upload_one_clip` directly; does not modify `src/uploader/runner.py`.
+- [x] `src/weekly_run.py` — orchestrator: per-stage lambda pipeline (each stage's verified real signature), opens/closes `runs` row, JSON summary, `weekly_run_finished` / `weekly_run_failed` alerts.
+- [x] `src/retention/` — Phase 6 skeleton (enumeration only; `dry_run=False` raises `NotImplementedError`). Phase 7 will flip the kill switch.
+- [x] `src/bootstrap.py` — extended with `--smoke --keyword <X>` subcommand. Drives the full pipeline against the test channel for one keyword.
+- [x] `scripts/weekly_run.xml` + `scripts/daily_upload.xml` — Windows Task Scheduler templates for Sundays 02:00 SGT and daily 09:00 SGT.
+
+### slot_planner — DB-first persistence + reconcile sweep
+- [x] **Allocator (pure)**: builds slot grid, filters past-by-`min_lead_minutes`, caps at `clips_per_day * days_per_run`. Cross-TZ DST tests for `America/New_York` spring-forward + `Europe/Berlin` fall-back exercise zoneinfo correctness.
+- [x] **Per-clip flow** (`slot_one_clip`):
+  1. Status preflight: `approved` → `skipped_locked`; `youtube_video_id` set → `skipped_locked`; non-`quality_pass` → `skipped_wrong_status`; `quality_pass + publish_at_utc + no --force` → `skipped_already_slotted`.
+  2. `--force` gate: blocks `approved` and uploaded clips even with `--force` (per Phase 6 plan — user has vouched for that exact artifact).
+  3. Compute new filename `{YYYY-MM-DD}__slot_{HHMM}__{title_slug}.mp4` from the assignment + slug recovered from current `output_path` basename (with regex extraction or fallback to `editor.slug.title_slug`).
+  4. **DB write FIRST** in one `repo.tx()` (publish_at_utc + publish_slot_local + output_path); status stays `quality_pass`.
+  5. `os.replace(old_path, new_path)` AFTER tx commits. On `OSError` returns `error_rename_failed` with DB already pointing at new path; the next slot_planner run's `reconcile_slot_renames` heals it.
+  6. Idempotent recovery branches: file already at new path → `slotted` no-op; old path missing + new path missing → `error_no_output`; both paths exist → `error_both_paths_exist` with `slot_rename_both_exist` alert.
+- [x] **`reconcile_slot_renames` (startup sweep)**: scans `output/pending/` for `__unscheduled__{clip_id}__*.mp4`, looks up each clip in DB; if `publish_at_utc IS NOT NULL` and `output_path` points elsewhere, performs `os.replace` to complete the rename. Emits `slot_rename_both_exist` alert on collision; `slot_rename_failed` alert on OSError. Idempotent (no-op when filesystem and DB agree).
+
+### daily_upload — approval reconciliation + today-window + recovered_slot
+- [x] **`reconcile_approvals(repo, cfg, *, dry_run=False)`**: scans `output/approved/` for files dragged in by the user; flips matching `quality_pass` clip's status to `'approved'` and rewrites `output_path` in one tx. Match key: Python `Path(...).name` lookup against an in-memory map of eligible clips' basenames (avoids SQL `LIKE` wildcard pitfalls if a slug ever contains `%` or `_`). `dry_run=True` logs would-be flips without writing — matches Phase 5's strict no-DB-writes-in-dry-run contract.
+- [x] **Today-window filter**: end-of-today computed in `cfg.timezone` via zoneinfo, converted to UTC ISO Z. Window is `<= end_of_today_local` so past-due clips (PC was off, Task Scheduler skipped a day) are recovered alongside today's slots; tomorrow's clips are excluded.
+- [x] **Status whitelist** based on `cfg.human_review`: `('approved',)` when True, `('quality_pass', 'approved')` when False. Enforced at the SQL boundary in `repo.clips_for_upload_due(end_of_window_utc_iso_z, *, statuses=...)` — the human-review gate is impossible to bypass.
+- [x] **`recovered_slot` detection**: classified distinctly from generic `publish_at_padded`. Fires only when `was_padded=True` AND the row's intended `publish_at_utc` was strictly in the past at upload time. Plain "5 minutes from now needed padding to 20 minutes" emits the existing `publish_at_padded` alert, not `recovered_slot`.
+- [x] Reuses Phase 5's runner-startup orphan reconcile gate (`reconcile_orphans`) as the very first step. Inconsistent marker → exit 4. Quota-exceeded breaks the batch identically to Phase 5.
+
+### weekly_run — per-stage adapter pipeline
+- [x] **Real signatures honored** (verified against existing modules 2026-05-05): discovery needs `(cfg, repo, ledger, youtube, *, force, dry_run)`; downloader is `(cfg, repo)` with NO dry_run flag; lang_detect/selector/policy_gate/editor/quality_screen/slot_planner all `(repo, cfg, *, dry_run=...)` with `policy_gate` also taking `ollama_host`; retention always `dry_run=True` (Phase 6 skeleton).
+- [x] Pipeline is a list of `(stage_name, lambda)` pairs so one consistent failure-handling loop wraps them all. Lambda indirection lets each stage's heterogeneous signature live inline.
+- [x] **`runs` row** opened at start with `kind='weekly'` (REUSE `repo.start_run`); closed at finish with `success=1` and `summary_json=json.dumps(summary)` (REUSE `repo.finish_run` — takes a JSON **string**, orchestrator wraps `json.dumps` itself). Failure path closes with `success=0` + the error in the summary, then re-raises.
+- [x] **Honest `--dry-run` policy** (per CLI help text):
+  - discovery: `dry_run=True` (still spends quota; existing behavior — no DB writes).
+  - downloader: SKIPPED entirely via `[] if args.dry_run else downloader.run_all(...)`.
+  - lang_detect / selector / policy_gate / editor / quality_screen / slot_planner: `dry_run=True` propagated.
+  - retention: always `dry_run=True` in Phase 6.
+- [x] Alerts: `weekly_run_finished` on success, `weekly_run_failed` (`{ExceptionType}: {first 200 chars}`) on failure.
+
+### bootstrap --smoke
+- [x] `python -m src.bootstrap --smoke --keyword "<keyword>"` drives the full pipeline against the test channel.
+- [x] Sequence: `discovery.run_for_keyword` → `downloader.run_all` → `lang_detect.run_all` → `selector.run_all` → `policy_gate.run_all` → `editor.run_all` → `quality_screen.run_all` → pick first `quality_pass` clip with NULL `publish_at_utc` → `upload_one_clip(explicit_publish_at=now+30min)`. **Bypasses slot_planner** — smoke is a one-shot, not bulk slotting.
+- [x] First failure halts; raises so the CLI exits 1. `--smoke` without `--keyword` exits 2. `--check` and `--init-db` paths untouched.
+
+### Repository helpers added / reused
+- [x] **NEW** `repo.clips_for_slot_planner()` — `quality_pass` AND `publish_at_utc IS NULL` AND `youtube_video_id IS NULL`, ordered by `created_at ASC, clip_id ASC`. Excludes `approved` (slot_planner does not re-slot approved clips).
+- [x] **NEW** `repo.clips_for_upload_due(end_of_window_utc_iso_z, *, statuses=("quality_pass", "approved"))` — like `clips_for_upload()` but with an additional `publish_at_utc <= ?` predicate and a parameterized status whitelist. Empty statuses tuple returns `[]` defensively.
+- [x] **REUSE** `repo.start_run(kind)` / `repo.finish_run(run_id, success, summary_json)` — already exist; `summary_json` is a string, weekly_run wraps `json.dumps` itself.
+- [x] **REUSE** `repo.set_clip_status(clip_id, status, **extra)` — slot_planner writes `set_clip_status(clip_id, 'quality_pass', publish_at_utc=..., publish_slot_local=..., output_path=...)`; status field is a no-op, extras flow through.
+
+### Config + paths
+- [x] No new fields. Existing `cfg.timezone`, `cfg.upload_slots`, `cfg.clips_per_day`, `cfg.days_per_run`, `cfg.human_review` drive Phase 6.
+- [x] `requirements.txt` — added `tzdata` (required on Windows for `zoneinfo` to resolve IANA names like `Asia/Singapore`).
+
+### Cross-process safety note (deferred to Phase 7)
+- [x] DB-first persistence has a brief window between the `repo.tx()` commit and the `os.replace`: DB says the file is at the new path, but it's at the unscheduled path. If `daily_upload` runs in this gap (Task Scheduler overlap, manual concurrent invocation), it sees a "ready to upload" clip whose `output_path` doesn't exist and fails with `error_no_output`. The clip is recoverable on the next slot_planner run via `reconcile_slot_renames`, but the daily_upload window for it is missed.
+- [x] Phase 6 mitigation: non-overlapping Task Scheduler triggers (Sun 02:00 SGT vs daily 09:00 SGT) + README warning.
+- [ ] Phase 7: real `flock`-style run lock (e.g. `data/.weekly_run.lock` via `msvcrt.locking` on Windows).
+
+### Tests — 70 new (397 total: 327 prior + 70 Phase 6)
+- [x] `tests/test_slot_planner_allocator.py` (13) — empty input, exactly N, more than N (overflow), past-slot filter, `min_lead_minutes` window, `clips_per_day < len(upload_slots)` cap, deterministic order across reruns, weekly_run-on-Sunday-02:00 produces today-09:00 SGT first slot, naive `now_local` raises, filename helpers (`filename_date` / `filename_hhmm`), `America/New_York` spring-forward, `Europe/Berlin` fall-back uses fold=0.
+- [x] `tests/test_slot_planner_runner.py` (16) — preflight matrix (`uploaded`/`approved`/`rendered`/`quality_pass`-with-and-without-pat), `--force` blocks `approved`, DB-first persistence (tx commits before rename), rename-crash leaves DB committed and file at old path, reconcile heals the partial-write next run, reconcile idempotent on healthy state, reconcile skips clips with publish_at_utc=NULL, both-paths-exist alert, dry-run no rename + no DB write, `--force` re-slots quality_pass+pat clips, run_all empty/overflow/force.
+- [x] `tests/test_daily_upload_approval.py` (7) — flips quality_pass → approved on basename match, no-flip when file absent, idempotent on already-approved, slug-with-underscores does not break matching (regression on rejected SQL-LIKE approach), ignores non-mp4 files, ignores clips with publish_at_utc=NULL, `dry_run=True` logs but does not write.
+- [x] `tests/test_daily_upload_window.py` (8) — window end in SGT is 23:59 local converted to UTC, day-boundary crossings handled, `clips_for_upload_due` filters by window, status whitelist `('approved',)` excludes quality_pass, status whitelist `('quality_pass', 'approved')` includes both, excludes uploaded clips, includes past-due clips for missed-slot recovery, empty statuses tuple returns `[]`.
+- [x] `tests/test_daily_upload_recovery.py` (7) — orphan_inconsistent → exit 4 + alert, recovered_slot alert for past-due clip, padded-but-not-past does NOT emit recovered_slot (regression), quota_exceeded breaks batch, `human_review=True` blocks `quality_pass` (the headline correctness fix), `human_review=False` uploads `quality_pass` directly, dry-run does not persist.
+- [x] `tests/test_weekly_run.py` (6) — happy path calls each stage with verified signature, `--dry-run` skips downloader entirely, finished alert written on success, `runs` row stored with `summary_json` as a JSON **string** (regression on the actual existing helper), stage failure halts and records error + alert, `finish_run` called with a string (not a dict).
+- [x] `tests/test_retention_skeleton.py` (8) — raw candidates require age >= retention.raw_video AND all derived clips uploaded, age below threshold excludes, transcript candidates use mtime, dup_hashes count by created_at threshold, quota_usage count by date threshold, run_all dry-run aggregates, real-mode raises NotImplementedError (Phase 7 reservation).
+- [x] `tests/test_bootstrap_smoke.py` (5) — `--smoke` requires `--keyword` (exit 2), happy-path runs each stage and exits 0, stage failure exits 1, `--check` path unchanged, `--init-db` path unchanged.
+
+### Acceptance
+- [x] `pytest tests/` — **397 passing** (327 prior + 70 Phase 6).
+- [x] All idempotency invariants:
+  - Slot-write is DB-first; rename failures are healed by next-run reconcile.
+  - `--force` blocks both uploaded clips AND approved clips (regression test).
+  - Approval reconciliation matches by Python basename, not SQL LIKE.
+  - Approval reconciliation is forward-only (no demote-back-to-quality_pass path).
+  - `dry_run=True` writes nothing in either reconcile_approvals OR upload_one_clip (Phase 5 isolation parity).
+  - Recovered_slot alert only fires for past-due intended slots; future-too-near padding still emits the generic publish_at_padded alert.
+- [ ] **Live, post-merge:** `python -m src.slot_planner --dry-run` on the live DB lists `WHibDIQHeaY_31_65` exactly once with a slot in `now+0..7d`.
+- [ ] **Live, post-merge:** `python -m src.slot_planner --clip-id WHibDIQHeaY_31_65` writes DB + renames the file to `2026-MM-DD__slot_HHMM__*.mp4`.
+- [ ] **Live, post-merge:** Drag the slot-named file from `output/pending/` to `output/approved/`. Run `python -m src.daily_upload --dry-run` — `reconcile_approvals(dry_run=True)` LOGS the would-be flip; `clips_for_upload_due(statuses=('approved',))` returns 0 because DB still says quality_pass. No DB writes (Phase 5 isolation parity).
+- [ ] **Live, post-merge:** `python -m src.daily_upload` — real-mode flips status to `approved`, then uploads to test channel. `clips.status='uploaded'`, `youtube_video_id` populated.
+- [ ] **Live, post-merge:** **Human-review gate verification** — with the slot-named file STILL in `output/pending/` (not approved), run `python -m src.daily_upload`. Expect 0 uploads, 0 status flips, no API call.
+- [ ] **Live, post-merge:** **Crash-recovery** — `mv` the slot-named file back to its `__unscheduled__{clip_id}__*.mp4` form while DB still has the slot-named `output_path`. Run `python -m src.slot_planner` — `reconcile_slot_renames` heals the state, file returns to slot-named path.
+- [ ] **Live, post-merge:** `python -m src.weekly_run --dry-run` walks the full pipeline (downloader skipped under --dry-run); `runs` row gets `success=1` and a non-null `summary_json`; `weekly_run_finished` alert appended.
+- [ ] **Live, post-merge:** Task Scheduler import — `schtasks /Create /XML scripts/weekly_run.xml /TN MediaAgentWeeklyTest` succeeds; `schtasks /Run /TN MediaAgentWeeklyTest` triggers the job; `schtasks /Delete /TN MediaAgentWeeklyTest /F` cleans up.
+- [ ] **Live, post-merge:** `python -m src.bootstrap --smoke --keyword "iconic movie moments"` end-to-end against the test channel (deferred until Pivot.1–5 produces movie-clip output).
+
+### Out of scope for Phase 6 (deferred)
+- Real retention deletion (Phase 7 — flips `dry_run=False` after live disk validation).
+- `logs/runs.md` per-run summary writer (Phase 7; Phase 6 writes only to `runs` table).
+- `tenacity` retry/backoff on transient HTTP errors (Phase 7).
+- `flock`-style run lock to make the slot-planner DB-committed/rename-crashed gap impossible (Phase 7).
+- `logs/alerts.md` UTF-8 encoding fix (separate PR — Phase 6 alert kinds stay ASCII).
+- Pivot.1–5 (caption-first transcripts + full-screen blurred-bg renderer + banlist tune + live keyword sweep) — Phase 6 contracts are content-agnostic.
+- Quota-increase audit form (operations task; documented in README).
+- Subject tracking / face-aware crop (Phase 8).
+- Web dashboard for queue inspection (Phase 8).
 
 ## Phase 7 — Hardening
 - [ ] `loguru` config + log rotation (daily, 30-day retention)

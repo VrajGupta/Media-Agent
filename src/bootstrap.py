@@ -1,12 +1,10 @@
 """
-Phase 0 environment health check.
+Phase 0 environment health check + Phase 6 end-to-end smoke test.
 
 Usage:
-    python -m src.bootstrap --check        # verify env, no side effects beyond DB init
-    python -m src.bootstrap --init-db      # create state.db with full schema
-
-Each check prints a single line: ✓ <name> or ✗ <name>: <reason>.
-Exit code is 0 only if every check passes.
+    python -m src.bootstrap --check                         # verify env (Phase 0)
+    python -m src.bootstrap --init-db                       # create state.db with full schema
+    python -m src.bootstrap --smoke --keyword "<keyword>"   # Phase 6 single-keyword smoke
 """
 
 from __future__ import annotations
@@ -16,10 +14,12 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from src.config_loader import load_config
-from src.state import connect, initialize_schema
+from src.state import Repository, connect, initialize_schema
 
 
 def _ok(name: str, detail: str = "") -> bool:
@@ -110,11 +110,16 @@ def check_youtube_oauth(client_secrets: Path, oauth_token: Path) -> bool:
     return _ok("youtube-oauth", "client_secrets + cached token present")
 
 
-def check_gameplay_pool(pool: list[Path]) -> bool:
-    missing = [str(p) for p in pool if not p.exists()]
-    if missing:
-        return _fail("gameplay-pool", f"missing files: {missing}")
-    return _ok("gameplay-pool", f"{len(pool)} files")
+def check_copyright_acknowledgement(cfg) -> bool:
+    """Pivot.0 added copyright_acknowledgement as an optional ack of the
+    elevated movie-clip strike risk. Surface as a soft warning in --check;
+    not a hard failure."""
+    ack = getattr(cfg, "copyright_acknowledgement", None)
+    if not ack:
+        print("  WARN copyright-ack: cfg.copyright_acknowledgement not set "
+              "(movie-clip strike risk unacknowledged)")
+        return True
+    return _ok("copyright-ack", f"value={ack!r}")
 
 
 def check_dirs(cfg) -> bool:
@@ -160,9 +165,7 @@ def run_checks(cfg) -> int:
             cfg.abs_path(cfg.paths.oauth_token),
         )
     )
-    results.append(
-        check_gameplay_pool([cfg.abs_path(p) for p in cfg.gameplay_pool])
-    )
+    results.append(check_copyright_acknowledgement(cfg))
     failures = sum(1 for ok in results if not ok)
     print()
     if failures:
@@ -172,10 +175,129 @@ def run_checks(cfg) -> int:
     return 0
 
 
+def run_smoke(cfg, keyword: str) -> Dict[str, Any]:
+    """Phase 6 end-to-end smoke test.
+
+    Drives one keyword through the full pipeline against the configured test
+    channel. Each stage's run_all is invoked (idempotent skips make this cheap
+    when most work is done; first run will Whisper, render, and upload one
+    clip).
+
+    Returns a summary dict; raises on any stage failure so the CLI exits
+    non-zero with a clear error.
+
+    Stages (matches the Phase 6 plan):
+      1. discovery.run_for_keyword(cfg, repo, ledger, youtube, keyword)
+      2. downloader.run_all(cfg, repo)
+      3. lang_detect.run_all(repo, cfg)
+      4. selector.run_all(repo, cfg)
+      5. policy_gate.run_all(repo, cfg, ollama_host=...)
+      6. editor.run_all(repo, cfg)
+      7. quality_screen.run_all(repo, cfg)
+      8. Pick the first quality_pass clip with NULL publish_at_utc; upload it
+         via uploader.upload_one_clip with explicit_publish_at=now+30min.
+         (Bypasses slot_planner — smoke is a one-shot, not bulk slotting.)
+    """
+    from src import discovery, downloader, lang_detect, selector
+    from src import policy_gate, editor, quality_screen
+    from src.integrations.youtube import build_youtube_client
+    from src.observability import setup_logging
+    from src.quota_ledger import QuotaLedger
+    from src.uploader.runner import UploadOutcome, upload_one_clip
+
+    setup_logging(cfg.abs_path(cfg.paths.logs_dir))
+    db_path = cfg.abs_path(cfg.paths.state_db)
+    if not db_path.exists():
+        raise RuntimeError(
+            f"state.db not found at {db_path}. "
+            f"Run `python -m src.bootstrap --init-db` first."
+        )
+
+    conn = connect(db_path)
+    repo = Repository(conn)
+    youtube = build_youtube_client(cfg)
+    ledger = QuotaLedger(repo.conn, ceiling_units=int(cfg.youtube_quota_ceiling_units))
+    ollama_host = os.environ.get("OLLAMA_HOST")
+
+    summary: Dict[str, Any] = {"keyword": keyword, "stages": {}}
+    try:
+        print(f"[smoke 1/8] discovery for '{keyword}'")
+        kr = discovery.run_for_keyword(cfg, repo, ledger, youtube, keyword)
+        summary["stages"]["discovery"] = {
+            "inserted": kr.inserted, "fetched": kr.fetched, "skipped": kr.skipped,
+        }
+
+        print("[smoke 2/8] downloader")
+        dl_results = downloader.run_all(cfg, repo)
+        summary["stages"]["downloader"] = {"count": len(dl_results)}
+
+        print("[smoke 3/8] lang_detect")
+        lang_results = lang_detect.run_all(repo, cfg)
+        summary["stages"]["lang_detect"] = {"count": len(lang_results)}
+
+        print("[smoke 4/8] selector")
+        sel_results = selector.run_all(repo, cfg)
+        summary["stages"]["selector"] = {"count": len(sel_results)}
+
+        print("[smoke 5/8] policy_gate")
+        gate_results = policy_gate.run_all(repo, cfg, ollama_host=ollama_host)
+        summary["stages"]["policy_gate"] = {"count": len(gate_results)}
+
+        print("[smoke 6/8] editor")
+        ed_results = editor.run_all(repo, cfg)
+        summary["stages"]["editor"] = {"count": len(ed_results)}
+
+        print("[smoke 7/8] quality_screen")
+        qs_results = quality_screen.run_all(repo, cfg)
+        summary["stages"]["quality_screen"] = {"count": len(qs_results)}
+
+        # 8. Find the first quality_pass clip with NULL publish_at_utc and
+        # upload it directly (bypassing slot_planner) with an explicit
+        # publish_at = now + 30min.
+        clip_row = repo.conn.execute(
+            "SELECT clip_id FROM clips "
+            "WHERE status='quality_pass' AND publish_at_utc IS NULL "
+            "AND youtube_video_id IS NULL "
+            "ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+        if clip_row is None:
+            summary["stages"]["upload"] = {"skipped": "no quality_pass clip available"}
+            print("[smoke 8/8] no quality_pass clip available; smoke ends here")
+        else:
+            clip_id = clip_row["clip_id"]
+            target = datetime.now(timezone.utc) + timedelta(minutes=30)
+            print(f"[smoke 8/8] uploader upload_one_clip({clip_id}, publishAt={target.isoformat()})")
+            result = upload_one_clip(
+                repo=repo, cfg=cfg, ledger=ledger, youtube=youtube,
+                clip_id=clip_id,
+                explicit_publish_at=target,
+                ollama_host=ollama_host,
+            )
+            summary["stages"]["upload"] = {
+                "clip_id": result.clip_id,
+                "outcome": result.outcome.value,
+                "youtube_video_id": result.youtube_video_id,
+            }
+            if result.outcome not in (UploadOutcome.uploaded,
+                                      UploadOutcome.skipped_already_uploaded,
+                                      UploadOutcome.dry_run):
+                raise RuntimeError(
+                    f"smoke upload failed: outcome={result.outcome.value} "
+                    f"reason={result.reason!r}"
+                )
+        return summary
+    finally:
+        conn.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="environment health check")
     parser.add_argument("--init-db", action="store_true", help="initialize state.db schema")
+    parser.add_argument("--smoke", action="store_true",
+                        help="Phase 6 end-to-end smoke test for one keyword")
+    parser.add_argument("--keyword",
+                        help="keyword for --smoke (required when --smoke is set)")
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
 
@@ -183,6 +305,19 @@ def main() -> int:
 
     if args.init_db:
         init_db(cfg)
+        return 0
+
+    if args.smoke:
+        if not args.keyword:
+            print("--smoke requires --keyword", file=sys.stderr)
+            return 2
+        try:
+            summary = run_smoke(cfg, args.keyword)
+        except Exception as exc:
+            print(f"smoke failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        import json
+        print(json.dumps(summary, indent=2))
         return 0
 
     if args.check or len(sys.argv) == 1:

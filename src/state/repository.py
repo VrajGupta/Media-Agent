@@ -242,6 +242,58 @@ class Repository:
             "ORDER BY publish_at_utc ASC, clip_id ASC"
         ).fetchall()
 
+    # ---- slot_planner / daily_upload (Phase 6) ----
+
+    def clips_for_slot_planner(self) -> list[sqlite3.Row]:
+        """Clips ready for slot allocation: quality_pass with NULL publish_at_utc
+        and NULL youtube_video_id.
+
+        Ordered by created_at ASC then clip_id ASC so allocation is
+        reproducible across reruns of the same batch (critical for --dry-run
+        parity vs. real-mode).
+
+        Approved clips are EXCLUDED — once a clip is approved, the user has
+        vouched for that exact artifact. Slot_planner does not re-slot
+        approved clips even with --force (per Phase 6 plan).
+        """
+        return self.conn.execute(
+            "SELECT * FROM clips "
+            "WHERE status='quality_pass' "
+            "AND publish_at_utc IS NULL "
+            "AND youtube_video_id IS NULL "
+            "ORDER BY created_at ASC, clip_id ASC"
+        ).fetchall()
+
+    def clips_for_upload_due(
+        self,
+        end_of_window_utc_iso_z: str,
+        *,
+        statuses: tuple[str, ...] = ("quality_pass", "approved"),
+    ) -> list[sqlite3.Row]:
+        """Clips_for_upload() with an additional `publish_at_utc <= ?` window
+        bound and a parameterized status whitelist.
+
+        Caller passes the whitelist based on cfg.human_review:
+          - human_review=True  → statuses=("approved",)
+          - human_review=False → statuses=("quality_pass", "approved")
+
+        Window semantics: `<=` end-of-today (caller computes in cfg.timezone
+        and converts to UTC). Past-due clips ARE included so missed-slot
+        recovery works (PC was off / Task Scheduler skipped a day).
+        """
+        if not statuses:
+            return []
+        placeholders = ",".join("?" for _ in statuses)
+        return self.conn.execute(
+            f"SELECT * FROM clips "
+            f"WHERE status IN ({placeholders}) "
+            f"AND publish_at_utc IS NOT NULL "
+            f"AND publish_at_utc <= ? "
+            f"AND youtube_video_id IS NULL "
+            f"ORDER BY publish_at_utc ASC, clip_id ASC",
+            (*statuses, end_of_window_utc_iso_z),
+        ).fetchall()
+
     def get_clip_with_video(self, clip_id: str) -> sqlite3.Row | None:
         """Joined clips + videos row for the templater.
 

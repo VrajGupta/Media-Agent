@@ -12,9 +12,8 @@ timezone: "Asia/Singapore"
 # Content pivot 2026-05-04: movie-clip reupload format. Old keywords archived in
 # CLAUDE.md history. Niche baseline resets on first weekly run (cold start safe).
 keywords:
-  - "best movie scenes"
-  - "iconic movie moments"
-  - "movie clips 4k"
+  - "famous movie clips"
+  - "new trending movie clips"
 search_max_results_per_keyword: 50                    # maxResults per search.list page (API caps at 50)
 discovery_max_inspected_per_keyword: 200              # total UNIQUE IDs to fetch via pagination
 discovery_min_interval_hours: 6                       # cooldown for the idempotency guard

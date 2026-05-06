@@ -13,6 +13,11 @@ pyyaml>=6.0.2
 pydantic>=2.9.0
 python-dotenv>=1.0.1
 
+# tzdata is required on Windows so zoneinfo (Python 3.11+ stdlib) can resolve
+# IANA names like "Asia/Singapore". On Linux/macOS the system tz database is
+# usually available, but pip-shipping tzdata makes the project portable.
+tzdata>=2024.1
+
 imagehash>=4.3.1
 Pillow>=11.0.0
 better-profanity>=0.7.0

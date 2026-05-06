@@ -55,6 +55,41 @@ Windows Task Scheduler runs (`scripts/weekly_run.xml`, `scripts/daily_upload.xml
 - **Weekly:** Sunday 02:00 SGT — heavy GPU work.
 - **Daily:** every day 09:00 SGT — uploads under quota cap (4 uploads × 1,600 = 6,400 units).
 
+### Task Scheduler templates (LOCAL — edit before importing)
+
+The XMLs in `scripts/` are templates for **this** machine's paths
+(`C:\Users\cryptix\Documents\Media-Agent-main`). If you check the project
+out elsewhere, edit `<Command>` and `<WorkingDirectory>` in both XML files
+before `schtasks /Create` to match your venv and worktree paths.
+
+Import on this machine:
+
+```powershell
+schtasks /Create /XML scripts\weekly_run.xml   /TN MediaAgentWeekly
+schtasks /Create /XML scripts\daily_upload.xml /TN MediaAgentDailyUpload
+```
+
+Run-once for verification:
+
+```powershell
+schtasks /Run /TN MediaAgentWeekly
+schtasks /Run /TN MediaAgentDailyUpload
+```
+
+Remove:
+
+```powershell
+schtasks /Delete /TN MediaAgentWeekly       /F
+schtasks /Delete /TN MediaAgentDailyUpload  /F
+```
+
+**Important — do not run `weekly_run` and `daily_upload` simultaneously.**
+The Task Scheduler triggers (Sunday 02:00 SGT vs daily 09:00 SGT) are
+non-overlapping by design; manual concurrent invocation could let
+`daily_upload` see a clip in the brief gap between `slot_planner`'s DB
+commit and its file rename. A `flock`-style run lock is deferred to
+Phase 7.
+
 ## Future quota-increase audit
 
 YouTube Data API default quota is 10,000 units/day → ~6 inserts/day cap. If you submit the API Services audit and Google grants more, the daily upload run can collapse into the weekly one. Form lives in Cloud Console → APIs & Services → YouTube Data API v3 → Quotas → "Apply for higher quota."
