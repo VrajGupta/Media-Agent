@@ -1,0 +1,10 @@
+# Music tracks are user-curated and out-of-tree.
+# Drop royalty-free .mp3/.m4a/.wav/.flac/.ogg files in this directory.
+*.mp3
+*.m4a
+*.wav
+*.flac
+*.ogg
+*.aac
+!.gitignore
+!README.md

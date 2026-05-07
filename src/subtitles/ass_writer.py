@@ -20,12 +20,14 @@ from __future__ import annotations
 from typing import Iterable
 
 # Layout: 1080x1920 vertical canvas. Subtitle anchored at the geometric
-# center (540, 1340) — roughly 70% down the canvas — using middle-center
-# alignment (\an5) so the chunk grows from its center.
+# center (540, 1500) — roughly 78% down the canvas — using middle-center
+# alignment (\an5) so the chunk grows from its center. Pivot.3: position
+# moved from 1340 (split-screen sweet spot) to 1500 to sit clear of the
+# centered 1080x608 foreground band on the new full-screen blurred-bg layout.
 PLAY_RES_X = 1080
 PLAY_RES_Y = 1920
 ANCHOR_X = 540
-ANCHOR_Y = 1340
+ANCHOR_Y = 1500
 
 FONT_NAME = "Impact"
 FONT_SIZE = 120

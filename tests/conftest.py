@@ -72,7 +72,9 @@ class StubConfig:
                      rejected_dir: str = "",
                      # Phase 5
                      approved_dir: str = "", dry_run_dir: str = "",
-                     orphans_dir: str = "", oauth_token: str = ""):
+                     orphans_dir: str = "", oauth_token: str = "",
+                     # Pivot.3
+                     music_dir: str = ""):
             self.raw_dir = raw_dir
             self.logs_dir = logs_dir
             self.state_db = state_db
@@ -84,6 +86,8 @@ class StubConfig:
             self.dry_run_dir = dry_run_dir
             self.orphans_dir = orphans_dir
             self.oauth_token = oauth_token
+            # Pivot.3
+            self.music_dir = music_dir
 
     def __init__(
         self,
@@ -104,7 +108,12 @@ class StubConfig:
         nvenc_preset: str = "p5",
         nvenc_cq: int = 23,
         loudness_target_lufs: float = -14.0,
-        gameplay_pool: list[str] | None = None,
+        blurred_bg_sigma: int = 20,
+        # Pivot.3 audio
+        music_enabled: bool = True,
+        music_volume_db: float = -15.0,
+        dialogue_reverb_enabled: bool = True,
+        dialogue_reverb_aecho: str = "0.8:0.88:60:0.4",
         # Phase 4.5 — policy_gate / quality_screen knobs.
         banlist: list[str] | None = None,
         hook_sanity_min_score: int = 3,
@@ -139,7 +148,12 @@ class StubConfig:
         self.nvenc_preset = nvenc_preset
         self.nvenc_cq = nvenc_cq
         self.loudness_target_lufs = loudness_target_lufs
-        self.gameplay_pool = gameplay_pool if gameplay_pool is not None else []
+        self.blurred_bg_sigma = blurred_bg_sigma
+        # Pivot.3 audio knobs
+        self.music_enabled = music_enabled
+        self.music_volume_db = music_volume_db
+        self.dialogue_reverb_enabled = dialogue_reverb_enabled
+        self.dialogue_reverb_aecho = dialogue_reverb_aecho
         # Phase 4.5
         self.banlist = banlist if banlist is not None else []
         self.hook_sanity_min_score = hook_sanity_min_score
@@ -172,8 +186,10 @@ class StubConfig:
         approved = tmp_path / "output" / "approved"
         dry_run = tmp_path / "output" / "dry_run"
         orphans = tmp_path / "output" / "orphans"
+        # Pivot.3
+        music = tmp_path / "data" / "music"
         for d in (raw, logs, transcripts, pending, rejected,
-                  approved, dry_run, orphans):
+                  approved, dry_run, orphans, music):
             d.mkdir(parents=True, exist_ok=True)
         self.paths = self._Paths(
             str(raw), str(logs), str(tmp_path / "state.db"),
@@ -183,6 +199,7 @@ class StubConfig:
             approved_dir=str(approved),
             dry_run_dir=str(dry_run),
             orphans_dir=str(orphans),
+            music_dir=str(music),
             oauth_token=str(tmp_path / "oauth_token.json"),
         )
 

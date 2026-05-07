@@ -73,6 +73,25 @@ nvenc_preset: "p5"
 nvenc_cq: 23
 loudness_target_lufs: -14.0
 
+# --- Audio: dialogue reverb + background music ---
+# Reverb on dialogue gives a cinematic "trailer" feel. aecho params are
+# in_gain:out_gain:delays_ms:decays. The default below is a moderate single
+# delay; tune up to "0.8:0.9:80:0.5" for a deeper hall.
+dialogue_reverb_enabled: true
+dialogue_reverb_aecho: "0.8:0.88:60:0.4"
+
+# Background music: drop royalty-free tracks (phonk, lo-fi, anything trendy)
+# into data/music/ as mp3/m4a/wav/flac/ogg. Editor picks one deterministically
+# per clip via sha1(clip_id) modulo. Loops if the track is shorter than the
+# clip; trims if longer.
+#
+# music_volume_db is a flat gain reduction relative to the source music level.
+# YouTube Audio Library tracks ship at ~-14 LUFS; -15 dB drops them to ~-29 LUFS,
+# leaving the -14-LUFS dialogue clearly on top. Tune toward -10 if you want
+# music more present, toward -18 for ambient bed.
+music_enabled: true
+music_volume_db: -15
+
 # --- Copyright (movie clips have higher strike risk than podcasts) ---
 copyright_acknowledgement: "movie_clips_v1"            # explicit ack of pivot risk; bootstrap --check warns if absent
 
@@ -103,6 +122,7 @@ paths:
   rejected_dir: "output/rejected"
   dry_run_dir: "output/dry_run"
   orphans_dir: "output/orphans"                       # Phase 5 orphan-marker fence; cleaned up on happy path
+  music_dir: "data/music"                             # Pivot.3 — drop trendy tracks here (mp3/m4a/wav/flac/ogg)
   logs_dir: "logs"
   oauth_token: "data/oauth_token.json"
   client_secrets: "data/client_secret.json"

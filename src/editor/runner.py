@@ -1,14 +1,18 @@
-"""Editor orchestration (Phase 4): policy_pass -> rendered.
+"""Editor orchestration (Pivot.3 — full-screen blurred-bg + music).
 
 Per-clip flow:
-  preflight status -> resolve raw mp4 + transcript -> compute slug + tmp paths
-  -> reserve gameplay (short tx) -> write ASS file -> build ffmpeg argv
-  -> subprocess.run -> on success: os.replace + commit (clip status + gameplay
-  cursor in one tx). On failure: leave clip at 'policy_pass', alert at run end.
+  preflight status -> resolve raw mp4 + transcript -> probe audio stream
+  -> compute slug + tmp paths -> pick music track (deterministic per clip_id)
+  -> write ASS file -> build ffmpeg argv -> subprocess.run -> on success:
+  os.replace + commit clip status (no gameplay state to advance post-pivot).
+  On failure: leave clip at 'policy_pass', alert at run end.
 
 Phase 4.5 introduced a policy_gate stage between selector and editor. Clips
 must pass policy_gate (status='policy_pass') before the editor will pick them
 up — this guarantees rejected_policy clips never reach Phase 4.
+
+Pivot.3 (2026-05-07) replaced the split-screen + gameplay-rotation editor
+with full-screen blurred-bg + dialogue reverb + background music mix.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from typing import Optional
 from loguru import logger
 
 from src.config_loader import Config
-from src.editor import ffmpeg_runner, gameplay
+from src.editor import ffmpeg_runner, music as music_mod
 from src.editor.slug import title_slug
 from src.observability import append_alert
 from src.state import Repository
@@ -41,7 +45,6 @@ class EditorOutcome(str, Enum):
     rejected_render = "rejected_render"
     error_ffmpeg = "error_ffmpeg"
     error_no_transcript = "error_no_transcript"
-    error_no_gameplay = "error_no_gameplay"
 
 
 @dataclass
@@ -51,6 +54,7 @@ class EditorResult:
     output_path: Optional[str] = None
     title_slug: Optional[str] = None
     duration_s: float = 0.0
+    music_track: Optional[str] = None
     reason: Optional[str] = None
 
 
@@ -58,7 +62,7 @@ class EditorResult:
 class _BatchAlerts:
     ffmpeg_errors: list[str] = field(default_factory=list)
     no_transcript: list[str] = field(default_factory=list)
-    no_gameplay: list[str] = field(default_factory=list)
+    no_audio_stream: list[str] = field(default_factory=list)
 
 
 def _preflight(row: sqlite3.Row, force: bool) -> Optional[EditorOutcome]:
@@ -140,6 +144,16 @@ def render_one_clip(
             duration_s=duration_s, reason="source_missing",
         )
 
+    # Pivot.3 pre-render audio probe: reject clips with no audio stream.
+    if not ffmpeg_runner.has_audio_stream(source_mp4):
+        logger.warning(f"source has no audio stream for {clip_id}: {source_mp4}")
+        if not dry_run:
+            repo.set_clip_status(clip_id, "rejected_render", reason="no_audio_stream")
+        return EditorResult(
+            clip_id, EditorOutcome.rejected_render,
+            duration_s=duration_s, reason="no_audio_stream",
+        )
+
     words = _load_transcript_words(transcripts_dir, video_id)
     if words is None:
         logger.warning(f"transcript missing for {clip_id} (video {video_id})")
@@ -152,18 +166,9 @@ def render_one_clip(
     final_output = _unscheduled_output_path(pending_dir, clip_id, slug)
     tmp_output = final_output.with_suffix(".tmp.mp4")
 
-    # Reserve gameplay outside the render tx. Read-only — no writes yet.
-    reservation = gameplay.reserve_next_segment(
-        repo,
-        cfg.project_root,
-        cfg.gameplay_pool,
-        clip_duration_s=duration_s,
-    )
-    if reservation is None:
-        return EditorResult(
-            clip_id, EditorOutcome.error_no_gameplay,
-            duration_s=duration_s, reason="no gameplay segment available",
-        )
+    # Pivot.3 music selection — deterministic per clip_id, None if pool empty
+    # or music_enabled=false.
+    music_path = music_mod.resolve_music_for_clip(cfg, clip_id)
 
     # Write ASS file to a temp dir (lifetime: this function).
     with tempfile.TemporaryDirectory(prefix=f"editor_{clip_id}_") as ass_tmpdir:
@@ -175,13 +180,16 @@ def render_one_clip(
             source_path=source_mp4,
             source_start_s=start_s,
             duration_s=duration_s,
-            gameplay_path=reservation.file_path,
-            gameplay_offset_s=reservation.offset_s,
             ass_path=ass_path,
             output_tmp_path=tmp_output,
+            music_path=music_path,
             nvenc_preset=cfg.nvenc_preset,
             nvenc_cq=cfg.nvenc_cq,
+            blurred_bg_sigma=int(getattr(cfg, "blurred_bg_sigma", 20)),
             loudness_target_lufs=cfg.loudness_target_lufs,
+            music_volume_db=float(getattr(cfg, "music_volume_db", -15.0)),
+            dialogue_reverb_enabled=bool(getattr(cfg, "dialogue_reverb_enabled", True)),
+            dialogue_reverb_aecho=str(getattr(cfg, "dialogue_reverb_aecho", "0.8:0.88:60:0.4")),
         )
 
         if dry_run:
@@ -190,10 +198,13 @@ def render_one_clip(
             for a in argv:
                 print(f"  {a}")
             print(f"[DRY-RUN] target: {final_output}")
+            print(f"[DRY-RUN] music: {music_path}")
             return EditorResult(
                 clip_id, EditorOutcome.rendered,
                 output_path=str(final_output), title_slug=slug,
-                duration_s=duration_s, reason="dry-run; no file written",
+                duration_s=duration_s,
+                music_track=str(music_path) if music_path else None,
+                reason="dry-run; no file written",
             )
 
         result = ffmpeg_runner.run_ffmpeg(argv, tmp_output)
@@ -213,10 +224,9 @@ def render_one_clip(
             reason=f"rc={result.returncode}; {err_msg[:120]}",
         )
 
-    # Promote tmp -> final + commit DB state in one tx.
+    # Promote tmp -> final + commit DB state (no gameplay state to advance).
     os.replace(tmp_output, final_output)
     with repo.tx():
-        gameplay.commit_advance(repo, reservation)
         repo.set_clip_status(
             clip_id, "rendered",
             output_path=str(final_output),
@@ -225,12 +235,14 @@ def render_one_clip(
 
     logger.info(
         f"rendered {clip_id} -> {final_output.name} "
-        f"({result.output_size_bytes / 1024 / 1024:.1f} MB, dur={duration_s:.1f}s)"
+        f"({result.output_size_bytes / 1024 / 1024:.1f} MB, dur={duration_s:.1f}s, "
+        f"music={music_path.name if music_path else 'none'})"
     )
     return EditorResult(
         clip_id, EditorOutcome.rendered,
         output_path=str(final_output), title_slug=slug,
         duration_s=duration_s,
+        music_track=str(music_path) if music_path else None,
     )
 
 
@@ -267,8 +279,9 @@ def run_all(
             alerts.ffmpeg_errors.append(f"{result.clip_id}: {result.reason}")
         elif result.outcome == EditorOutcome.error_no_transcript:
             alerts.no_transcript.append(result.clip_id)
-        elif result.outcome == EditorOutcome.error_no_gameplay:
-            alerts.no_gameplay.append(result.clip_id)
+        elif (result.outcome == EditorOutcome.rejected_render
+              and result.reason == "no_audio_stream"):
+            alerts.no_audio_stream.append(result.clip_id)
 
     if not dry_run:
         if alerts.ffmpeg_errors:
@@ -283,11 +296,11 @@ def run_all(
                 kind="editor_no_transcript",
                 message=f"{len(alerts.no_transcript)} clips lacked a transcript: {alerts.no_transcript[:5]}",
             )
-        if alerts.no_gameplay:
+        if alerts.no_audio_stream:
             append_alert(
                 cfg.abs_path(cfg.paths.logs_dir),
-                kind="editor_no_gameplay",
-                message=f"{len(alerts.no_gameplay)} clips had no gameplay segment available",
+                kind="editor_no_audio_stream",
+                message=f"{len(alerts.no_audio_stream)} clips had no audio stream: {alerts.no_audio_stream[:5]}",
             )
 
     rendered = sum(1 for r in results if r.outcome == EditorOutcome.rendered)
@@ -295,7 +308,7 @@ def run_all(
         f"editor summary: rendered={rendered} "
         f"ffmpeg_err={len(alerts.ffmpeg_errors)} "
         f"no_transcript={len(alerts.no_transcript)} "
-        f"no_gameplay={len(alerts.no_gameplay)} "
+        f"no_audio={len(alerts.no_audio_stream)} "
         f"total={len(results)}"
     )
     return results

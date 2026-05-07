@@ -392,61 +392,12 @@ class Repository:
             rows,
         )
 
-    # ---- gameplay rotation ----
-
-    def read_gameplay_pointer(self) -> int:
-        """Returns the round-robin next_index (0..len(gameplay_pool)-1).
-
-        Defaults to 0 if the pointer row is missing — the schema seeds it on
-        init, but a fresh test DB might not. Caller is responsible for modulo.
-        """
-        row = self.conn.execute(
-            "SELECT next_index FROM gameplay_pointer WHERE id=1"
-        ).fetchone()
-        return int(row["next_index"]) if row else 0
-
-    def read_gameplay_cursor(self, file_name: str) -> tuple[float, float | None]:
-        """Returns (last_offset_s, file_duration_s). file_duration_s is None
-        until the first ffprobe runs and the editor caches it back via
-        advance_gameplay_state.
-        """
-        row = self.conn.execute(
-            "SELECT last_offset_s, file_duration_s FROM gameplay_cursor WHERE file_name=?",
-            (file_name,),
-        ).fetchone()
-        if row is None:
-            return (0.0, None)
-        duration = row["file_duration_s"]
-        return (float(row["last_offset_s"]), float(duration) if duration is not None else None)
-
-    def advance_gameplay_state(
-        self,
-        *,
-        file_name: str,
-        new_offset_s: float,
-        file_duration_s: float,
-        new_pointer_index: int,
-    ) -> None:
-        """Updates gameplay_cursor (UPSERT) and gameplay_pointer in two
-        statements. Caller MUST wrap in repo.tx() — this method does not
-        open its own transaction so the post-render commit can include the
-        clip status update atomically.
-        """
-        self.conn.execute(
-            """
-            INSERT INTO gameplay_cursor (file_name, last_offset_s, file_duration_s, last_used_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(file_name) DO UPDATE SET
-                last_offset_s   = excluded.last_offset_s,
-                file_duration_s = excluded.file_duration_s,
-                last_used_at    = datetime('now')
-            """,
-            (file_name, float(new_offset_s), float(file_duration_s)),
-        )
-        self.conn.execute(
-            "UPDATE gameplay_pointer SET next_index=? WHERE id=1",
-            (int(new_pointer_index),),
-        )
+    # ---- gameplay rotation: REMOVED in Pivot.3 ----
+    # The split-screen + gameplay-rotation editor is gone. The gameplay_cursor
+    # and gameplay_pointer tables remain in schema.sql for backward compat
+    # with old DBs but no code reads or writes them. They can be dropped by
+    # Phase 7 retention's VACUUM pass once we're confident the columns won't
+    # be referenced again.
 
     # ---- discovery: status-preserving upsert ----
 

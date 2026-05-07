@@ -1,4 +1,6 @@
-"""ffmpeg argv + filtergraph + path-escape tests. No subprocess invoked."""
+"""ffmpeg argv + filtergraph + path-escape tests (Pivot.3 — full-screen
+blurred-bg + dialogue reverb + background music). No subprocess invoked.
+"""
 
 from __future__ import annotations
 
@@ -19,8 +21,8 @@ def test_windows_drive_path_escape():
     s = escape_ass_filter_path(r"C:\Users\foo\bar.ass")
     assert s.startswith("'")
     assert s.endswith("'")
-    assert "C\\:" in s              # colon escaped
-    assert "\\\\Users\\\\foo" in s  # backslashes doubled
+    assert "C\\:" in s
+    assert "\\\\Users\\\\foo" in s
 
 
 def test_posix_path_escape():
@@ -34,64 +36,153 @@ def test_path_with_comma_and_apostrophe():
     assert "\\'" in s
 
 
-# ---- filtergraph contents ---------------------------------------------------
+# ---- filtergraph contents (new pivot.3 layout) ------------------------------
 
 
-def test_filtergraph_contains_required_filters(tmp_path):
+def test_filtergraph_contains_split_and_blur(tmp_path):
     ass = tmp_path / "x.ass"
     ass.write_text("")
-    fg = build_filtergraph(ass)
-    assert "force_original_aspect_ratio=increase" in fg
-    assert "crop=1080:960" in fg
-    assert "vstack=inputs=2" in fg
+    fg = build_filtergraph(ass_path=ass, duration_s=30.0)
+    assert "[0:v]split=2" in fg
+    assert "gblur=sigma=20" in fg
+
+
+def test_filtergraph_foreground_is_1080x608(tmp_path):
+    ass = tmp_path / "x.ass"
+    ass.write_text("")
+    fg = build_filtergraph(ass_path=ass, duration_s=30.0)
+    assert "scale=1080:608:force_original_aspect_ratio=decrease" in fg
+
+
+def test_filtergraph_uses_overlay_centered_not_vstack(tmp_path):
+    """Pivot.3: split-screen vstack is gone; overlay (W-w)/2:(H-h)/2 is the new layout."""
+    ass = tmp_path / "x.ass"
+    ass.write_text("")
+    fg = build_filtergraph(ass_path=ass, duration_s=30.0)
+    assert "vstack" not in fg
+    assert "overlay=(W-w)/2:(H-h)/2" in fg
+
+
+def test_filtergraph_includes_ass_burn_at_end(tmp_path):
+    ass = tmp_path / "x.ass"
+    ass.write_text("")
+    fg = build_filtergraph(ass_path=ass, duration_s=30.0)
     assert "ass=" in fg
-    assert "loudnorm=I=-14" in fg
+    # ASS comes AFTER the overlay (burned on the composite, not the bg).
+    assert fg.index("overlay=") < fg.index("ass=")
 
 
-def test_filtergraph_does_not_contain_aspect_strip_crop(tmp_path):
-    """Regression: pre-revision draft had crop=in_w:in_h*9/16 — wrong on landscape input."""
+def test_filtergraph_dialogue_chain_has_aecho_when_enabled(tmp_path):
     ass = tmp_path / "x.ass"
     ass.write_text("")
-    fg = build_filtergraph(ass)
-    assert "in_w:in_h*9/16" not in fg
+    fg = build_filtergraph(
+        ass_path=ass, duration_s=30.0,
+        dialogue_reverb_enabled=True,
+        dialogue_reverb_aecho="0.8:0.88:60:0.4",
+    )
+    assert "aecho=0.8:0.88:60:0.4" in fg
 
 
-def test_top_and_bottom_chains_use_identical_scale_crop(tmp_path):
-    """Both panes use the same scale-fill + center-crop chain."""
+def test_filtergraph_dialogue_chain_has_no_aecho_when_disabled(tmp_path):
     ass = tmp_path / "x.ass"
     ass.write_text("")
-    fg = build_filtergraph(ass)
-    # Both [0:v] and [1:v] should be followed by the same scale + crop pair.
-    assert "[0:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[top]" in fg
-    assert "[1:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[bot]" in fg
+    fg = build_filtergraph(
+        ass_path=ass, duration_s=30.0,
+        dialogue_reverb_enabled=False,
+    )
+    assert "aecho=" not in fg
+
+
+def test_filtergraph_music_chain_uses_aloop_atrim_volume_amix(tmp_path):
+    ass = tmp_path / "x.ass"
+    ass.write_text("")
+    fg = build_filtergraph(
+        ass_path=ass, duration_s=42.5,
+        music_enabled=True,
+        music_volume_db=-15.0,
+    )
+    assert "[1:a]aloop=loop=-1" in fg
+    assert "atrim=0:42.500" in fg
+    assert "volume=-15dB" in fg
+    assert "amix=inputs=2:duration=first:normalize=0" in fg
+    assert "[a_voice]" in fg
+    assert "[a_music]" in fg
+
+
+def test_filtergraph_no_music_chain_when_disabled(tmp_path):
+    ass = tmp_path / "x.ass"
+    ass.write_text("")
+    fg = build_filtergraph(
+        ass_path=ass, duration_s=30.0,
+        music_enabled=False,
+    )
+    assert "[1:a]" not in fg
+    assert "amix" not in fg
+    assert "aloop" not in fg
+    # But dialogue chain ends at [a] directly.
+    assert "[a]" in fg
+
+
+def test_filtergraph_blur_sigma_configurable(tmp_path):
+    ass = tmp_path / "x.ass"
+    ass.write_text("")
+    fg = build_filtergraph(ass_path=ass, duration_s=30.0, blurred_bg_sigma=35)
+    assert "gblur=sigma=35" in fg
+    assert "gblur=sigma=20" not in fg
 
 
 # ---- argv structure ---------------------------------------------------------
 
 
-def test_argv_is_list_with_seeking_before_each_input(tmp_path):
+def test_argv_no_music_has_one_input(tmp_path):
     argv = build_ffmpeg_argv(
         ffmpeg_bin="ffmpeg",
         source_path=Path("/data/raw/v1.mp4"),
         source_start_s=10.5,
         duration_s=30.0,
-        gameplay_path=Path("/data/gameplay/subway.mp4"),
-        gameplay_offset_s=120.0,
         ass_path=tmp_path / "v1.ass",
         output_tmp_path=tmp_path / "out.tmp.mp4",
+        music_path=None,
     )
     assert isinstance(argv, list)
     assert all(isinstance(x, str) for x in argv)
+    i_idx = [i for i, a in enumerate(argv) if a == "-i"]
+    assert len(i_idx) == 1
 
-    # Find positions of -ss and -i.
+
+def test_argv_with_music_has_two_inputs(tmp_path):
+    argv = build_ffmpeg_argv(
+        ffmpeg_bin="ffmpeg",
+        source_path=Path("/data/raw/v1.mp4"),
+        source_start_s=10.5,
+        duration_s=30.0,
+        ass_path=tmp_path / "v1.ass",
+        output_tmp_path=tmp_path / "out.tmp.mp4",
+        music_path=Path("/data/music/phonk.mp3"),
+    )
+    i_idx = [i for i, a in enumerate(argv) if a == "-i"]
+    assert len(i_idx) == 2
+    # First -i is source video (argv slot is i_idx + 1), second is music.
+    assert "v1.mp4" in argv[i_idx[0] + 1]
+    assert "phonk.mp3" in argv[i_idx[1] + 1]
+
+
+def test_argv_seek_before_source_input_only(tmp_path):
+    """-ss precedes the source -i; music input does not require seek by default."""
+    argv = build_ffmpeg_argv(
+        ffmpeg_bin="ffmpeg",
+        source_path=Path("/x.mp4"),
+        source_start_s=5.0,
+        duration_s=30.0,
+        ass_path=tmp_path / "x.ass",
+        output_tmp_path=tmp_path / "out.tmp.mp4",
+        music_path=None,
+    )
     ss_idx = [i for i, a in enumerate(argv) if a == "-ss"]
     i_idx = [i for i, a in enumerate(argv) if a == "-i"]
-    assert len(ss_idx) == 2
-    assert len(i_idx) == 2
-    # Each -ss must precede its corresponding -i.
+    assert len(ss_idx) == 1
+    assert len(i_idx) == 1
     assert ss_idx[0] < i_idx[0]
-    assert ss_idx[1] < i_idx[1]
-    assert ss_idx[1] > i_idx[0]   # second -ss is between the two inputs
 
 
 def test_argv_does_not_contain_ss_inside_filtergraph(tmp_path):
@@ -101,10 +192,9 @@ def test_argv_does_not_contain_ss_inside_filtergraph(tmp_path):
         source_path=Path("/x.mp4"),
         source_start_s=5.0,
         duration_s=30.0,
-        gameplay_path=Path("/g.mp4"),
-        gameplay_offset_s=0.0,
         ass_path=tmp_path / "x.ass",
         output_tmp_path=tmp_path / "out.tmp.mp4",
+        music_path=Path("/m.mp3"),
     )
     fc_idx = argv.index("-filter_complex")
     filtergraph = argv[fc_idx + 1]
@@ -117,8 +207,6 @@ def test_argv_includes_nvenc_settings(tmp_path):
         source_path=Path("/x.mp4"),
         source_start_s=0.0,
         duration_s=30.0,
-        gameplay_path=Path("/g.mp4"),
-        gameplay_offset_s=0.0,
         ass_path=tmp_path / "x.ass",
         output_tmp_path=tmp_path / "out.tmp.mp4",
         nvenc_preset="p5",
@@ -128,3 +216,18 @@ def test_argv_includes_nvenc_settings(tmp_path):
     assert "p5" in argv
     assert "23" in argv
     assert "+faststart" in argv
+
+
+def test_argv_maps_video_and_audio_outputs(tmp_path):
+    argv = build_ffmpeg_argv(
+        ffmpeg_bin="ffmpeg",
+        source_path=Path("/x.mp4"),
+        source_start_s=0.0,
+        duration_s=30.0,
+        ass_path=tmp_path / "x.ass",
+        output_tmp_path=tmp_path / "out.tmp.mp4",
+    )
+    map_idx = [i for i, a in enumerate(argv) if a == "-map"]
+    assert len(map_idx) == 2
+    assert argv[map_idx[0] + 1] == "[v_out]"
+    assert argv[map_idx[1] + 1] == "[a]"

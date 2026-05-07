@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from src.subtitles.ass_writer import (
+    ANCHOR_X,
+    ANCHOR_Y,
     ASS_HEADER,
     escape_ass_text,
     render_ass,
@@ -136,3 +138,20 @@ def test_header_includes_play_res_and_style():
     fields = style_line[len("Style: "):].split(",")
     # Field index 18 (0-based) is Alignment.
     assert fields[18] == "5"
+
+
+# ---- Pivot.3: subtitle position moved to (540, 1500) -----------------------
+
+
+def test_subtitle_anchor_is_pivot3_position():
+    """Pivot.3 moved subtitle anchor from (540, 1340) to (540, 1500) so the
+    text sits clear of the centered 1080x608 foreground band."""
+    assert ANCHOR_X == 540
+    assert ANCHOR_Y == 1500
+
+
+def test_dialogue_pos_tag_uses_pivot3_position():
+    """Render output includes \\pos(540,1500) on dialogue lines."""
+    ass = render_ass([_word(0.0, 1.0, "hi")], clip_start_s=0.0, clip_end_s=1.0)
+    assert "\\pos(540,1500)" in ass
+    assert "\\pos(540,1340)" not in ass

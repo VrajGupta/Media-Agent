@@ -26,6 +26,7 @@ class Paths(BaseModel):
     rejected_dir: str
     dry_run_dir: str
     orphans_dir: str = "output/orphans"   # Phase 5; default for backward compat with older config files
+    music_dir: str = "data/music"         # Pivot.3; default for backward compat with older config files
     logs_dir: str
     oauth_token: str
     client_secrets: str
@@ -91,6 +92,12 @@ class Config(BaseModel):
     nvenc_preset: str
     nvenc_cq: int
     loudness_target_lufs: float
+
+    # Audio: dialogue reverb + background music (Pivot.3)
+    dialogue_reverb_enabled: bool = True
+    dialogue_reverb_aecho: str = "0.8:0.88:60:0.4"
+    music_enabled: bool = True
+    music_volume_db: float = -15.0
 
     # Copyright acknowledgement (Pivot.0) — optional string the user sets to
     # acknowledge the elevated strike risk of the movie-clip pivot. Surfaced
