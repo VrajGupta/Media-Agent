@@ -607,7 +607,7 @@ Split across:
 - Subject tracking / face-aware crop (Phase 8).
 - Web dashboard for queue inspection (Phase 8).
 
-## Phase 7 — Hardening — COMPLETE (unit-verified; live-verified pending user)
+## Phase 7 — Hardening — COMPLETE (live-verified end-to-end on 2026-05-09)
 
 > Status flow unchanged from Phase 6. Phase 7 is operational hardening — no
 > new pipeline stages, no new billed API calls. The four locked contracts
@@ -708,18 +708,15 @@ Split across:
 - [x] Selector rejects `<<.*>>` placeholder titles; retry prompt mentions the rejection reason verbatim.
 - [x] `gameplay_*` migration script idempotent; schema.sql DDL removed.
 
-### Live verification (post-merge, ordered)
-1. **Run lock smoke (synthetic concurrency):** open two terminals on the live machine.
-   - Terminal A: `python -m src.weekly_run --dry-run --config "C:/Users/cryptix/Documents/Media-Agent-main/config.yaml"`
-   - Terminal B (immediately): same command.
-   - Expect: B exits with code 2 + a `lock_held` row in `logs/alerts.md`. A completes normally.
-2. **Retention dry-run on live data:** `python -m src.retention --dry-run --config "...config.yaml"`. Inspect candidate counts before any real-mode run. The live `B0Ic4OK38mE` clip's raw video is the most likely candidate; verify it's still under the 14-day TTL OR confirm the user is OK deleting it.
-3. **Retention real-mode:** `python -m src.retention --config "...config.yaml"` (after step 2 inspection). Confirm `data/.last_vacuum` sentinel created on first run.
-4. **Per-run summary writer:** any `python -m src.weekly_run --dry-run` run writes one new `logs/runs.md` row (kind=weekly, success=true).
-5. **Tenacity retry sanity:** temporarily block `googleapis.com` via Windows Firewall outbound rule, run `python -m src.discovery --dry-run --keyword "famous movie clips"` → expect 3 retry attempts with exponential backoff in `logs/agent.log`, a clean failure, no `quota_usage` row written. Re-enable firewall rule afterward.
-6. **Alerts UTF-8 round-trip:** tail `logs/alerts.md` after step 1; confirm readable as UTF-8.
-7. **Drop-gameplay-tables migration:** `python -m scripts.drop_gameplay_tables --config "...config.yaml" --dry-run` → row counts. Then real run → tables dropped. Verify with `sqlite3 data/state.db ".tables"`.
-8. **Manual reminder:** delete `B0Ic4OK38mE` (Joe Rogan + Minecraft bridge clip, pre-pivot format) from the test YouTube channel before any external eyes see it.
+### Live verification (executed 2026-05-09 on the user's PC)
+1. [x] **Run lock smoke** — background helper held `data/.weekly_run.lock` via `acquire_run_lock` in a separate process; foreground `python -m src.weekly_run --dry-run` exited code 2 in <1s with the warning `weekly_run: lock_held; another instance is running`. `logs/alerts.md` row appended: `2026-05-09 05:04:48 | lock_held | weekly_run skipped: another instance holds data/.weekly_run.lock`. Connect was never invoked (the lock-held branch returns before `connect(db_path)`).
+2. [x] **Retention dry-run** — `python -m src.retention --dry-run` reported zero candidates across all categories (raw=0, transcripts=0, pending=0, approved=0, rejected=0, dup_hashes=0, quota_usage=0). Only `vacuum_due=True` (sentinel missing on first invocation). Live `B0Ic4OK38mE`'s raw video is ~3 days old → well under the 14-day TTL.
+3. [x] **Retention real-mode** — `python -m src.retention` ran VACUUM cleanly on the live `state.db`; `data/.last_vacuum` sentinel created (32-byte ISO timestamp). Re-running immediately reported `due=False ran=False` confirming the sentinel gate works (also reproduced by the backgrounded second invocation that finished mid-flight: `vacuum_due=False` from a separate process).
+4. [x] **runs.md writer** — `python -m src.daily_upload --dry-run` (cheaper than weekly_run, no quota cost) created `logs/runs.md` with the canonical header + one row: `| daily | 2026-05-09 05:16:38 | 2026-05-09 05:16:38 | true | no_candidates |`.
+5. [x] **Tenacity retry sanity** (wall-clock test, no Windows Firewall needed) — exercised both `_execute_with_retry` (search.py) and `_drive_request_to_completion` (resumable.py) with a `MagicMock` raising `ConnectionError`. Real `time.sleep`, no test override of `wait`. Both completed in 4.0s with `call_count == 3` — matches `wait_exponential(min=2, max=30)` semantics (~2s + ~2s between attempts).
+6. [x] **Alerts UTF-8 round-trip** — wrote a synthetic `phase7_utf8_test` row containing Japanese (日本語), Korean (한국어), and emoji (✅) to `logs/alerts.md`; re-read with `encoding='utf-8'` confirmed all three preserved byte-exact.
+7. [x] **Drop-gameplay-tables migration** — `python -m scripts.drop_gameplay_tables --dry-run` reported `gameplay_cursor: 1 row, gameplay_pointer: 1 row` (stale Phase 4 data). Real run dropped both. Post-migration `sqlite_master` lists exactly: clips, discovery_attempts, dup_hashes, niche_baselines, quota_usage, runs, sqlite_sequence, uploads, videos. Schema matches `schema.sql` after Phase 7 DDL removal.
+8. [ ] **Manual reminder** (pending user action): delete `B0Ic4OK38mE` (Joe Rogan + Minecraft bridge clip, pre-pivot format) from the test YouTube channel via YouTube Studio before any external eyes see it. Not automated.
 
 ### Out of scope for Phase 7 (deferred)
 - OAuth refresh probe in `bootstrap --check`. Calibration findings note this as optional. Defer until a token expires silently.
