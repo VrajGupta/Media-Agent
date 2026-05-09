@@ -716,7 +716,7 @@ Split across:
 5. [x] **Tenacity retry sanity** (wall-clock test, no Windows Firewall needed) — exercised both `_execute_with_retry` (search.py) and `_drive_request_to_completion` (resumable.py) with a `MagicMock` raising `ConnectionError`. Real `time.sleep`, no test override of `wait`. Both completed in 4.0s with `call_count == 3` — matches `wait_exponential(min=2, max=30)` semantics (~2s + ~2s between attempts).
 6. [x] **Alerts UTF-8 round-trip** — wrote a synthetic `phase7_utf8_test` row containing Japanese (日本語), Korean (한국어), and emoji (✅) to `logs/alerts.md`; re-read with `encoding='utf-8'` confirmed all three preserved byte-exact.
 7. [x] **Drop-gameplay-tables migration** — `python -m scripts.drop_gameplay_tables --dry-run` reported `gameplay_cursor: 1 row, gameplay_pointer: 1 row` (stale Phase 4 data). Real run dropped both. Post-migration `sqlite_master` lists exactly: clips, discovery_attempts, dup_hashes, niche_baselines, quota_usage, runs, sqlite_sequence, uploads, videos. Schema matches `schema.sql` after Phase 7 DDL removal.
-8. [ ] **Manual reminder** (pending user action): delete `B0Ic4OK38mE` (Joe Rogan + Minecraft bridge clip, pre-pivot format) from the test YouTube channel via YouTube Studio before any external eyes see it. Not automated.
+8. [x] **Manual cleanup** — user deleted `B0Ic4OK38mE` (Joe Rogan + Minecraft bridge clip, pre-pivot format) from the test YouTube channel via YouTube Studio. Test channel now contains only `yH1yaBZv7lg` (Pivot.3 movie clip).
 
 ### Out of scope for Phase 7 (deferred)
 - OAuth refresh probe in `bootstrap --check`. Calibration findings note this as optional. Defer until a token expires silently.
