@@ -607,24 +607,126 @@ Split across:
 - Subject tracking / face-aware crop (Phase 8).
 - Web dashboard for queue inspection (Phase 8).
 
-## Phase 7 — Hardening
-- [ ] `loguru` config + log rotation (daily, 30-day retention)
-- [ ] `tenacity` retry with backoff on all API calls
-- [ ] `observability/alerts.py` — append-only writer for `logs/alerts.md`
-- [ ] Alert rows wired to: weekly run finished, run failure, quota > 80%, upload rejected, missed-slot recovery
-- [ ] Per-run summary writer (`logs/runs.md`)
-- [ ] `retention/cleanup.py`:
-  - [ ] `data/raw/*.mp4` → 14-day TTL post-download or post-upload-of-derived
-  - [ ] `data/transcripts/*.json` → 90-day TTL
-  - [ ] `output/pending/*.mp4` and `output/approved/*.mp4` → delete 7 days post-`uploaded`
-  - [ ] `output/rejected/*.mp4` → delete after 30 days
-  - [ ] `dup_hashes` rows → 90-day TTL
-  - [ ] `quota_usage` rows → 90-day TTL
-  - [ ] Monthly SQLite `VACUUM`
-- [ ] All paths/tunables read from `config.yaml` (`clips_per_day`, `days_per_run`, `upload_slots`, `timezone`, `human_review`, `banlist`, `ollama_model`, `whisper_model`)
-- [ ] README with PC setup + Task Scheduler import steps
-- [ ] Document quota-increase audit form steps in README (deferred action item)
-- [ ] **Acceptance:** logs rotate; `logs/alerts.md` rows appear on synthetic triggers (run failure, quota > 80%, upload reject, missed-slot recovery); cleanup deletes correct files; double-running `weekly_run` is a no-op.
+## Phase 7 — Hardening — COMPLETE (unit-verified; live-verified pending user)
+
+> Status flow unchanged from Phase 6. Phase 7 is operational hardening — no
+> new pipeline stages, no new billed API calls. The four locked contracts
+> (idempotency, conservative quota recording, dry-run isolation, human-review
+> gate) all preserved and explicitly re-regression-tested.
+
+### Module skeleton
+- [x] `src/observability/runs_writer.py` — NEW. `append_run_row(logs_dir, kind, started_at, finished_at, success, summary)` writes to `logs/runs.md`. Best-effort, serialized cross-process by the run lock; concurrency contract documented in module docstring.
+- [x] `src/observability/run_lock.py` — NEW. `acquire_run_lock(lock_path)` context manager via `msvcrt.locking` (Windows). Raises `RunLockHeld` on contention. Imports `msvcrt` inside the function so the module loads cleanly on any platform; raises a clear `RuntimeError` on non-Windows.
+- [x] `src/observability/alerts.py` — UPDATE. `datetime.utcnow()` → `datetime.now(timezone.utc)`; `encoding="utf-8"` on both `write_text` and `open("a")`.
+- [x] `src/observability/__init__.py` — re-exports `append_run_row`, `acquire_run_lock`, `RunLockHeld`.
+- [x] `src/retention/cleanup.py` — UPDATE. Real-mode deletion replaces the Phase 6 `NotImplementedError`. `RetentionResult` extended with `deleted_*`, `pruned_*`, `vacuumed`, `already_gone`, `delete_errors`. `_safe_unlink` resolves every path under the project root before unlink.
+- [x] `src/retention/__main__.py` — UPDATE. CLI default flipped from dry-run to real mode (matches project convention).
+- [x] `src/uploader/resumable.py` — UPDATE. `tenacity.retry` wraps a private `_drive_request_to_completion` driver, NOT the outer `do_resumable_upload`. `check_or_raise` exactly-once; ledger.record at most once per logical attempt.
+- [x] `src/discovery/search.py` — UPDATE. Same retry pattern around a private `_execute_with_retry` helper inside `_call_with_ledger`.
+- [x] `src/selector/ranker.py` — UPDATE. `<<.*>>` placeholder regex rejection in `_validate_clips`; system prompt strengthened with an explicit no-placeholder line.
+- [x] `src/weekly_run.py` — UPDATE. Run lock acquisition in `main()` before any DB access; `runs.md` row appended on both success and failure (before re-raise); retention now honors `--dry-run` propagation (was hard-coded `dry_run=True` in Phase 6).
+- [x] `src/daily_upload.py` — UPDATE. Run lock + `runs.md` row at end of `run_today` (and on early-return paths: orphan abort, no-candidates).
+- [x] `scripts/drop_gameplay_tables.py` — NEW. One-shot migration; idempotent.
+- [x] `src/state/schema.sql` — UPDATE. Removed `gameplay_cursor` + `gameplay_pointer` CREATE blocks + the seed `INSERT OR IGNORE` row; replaced with a comment pointing at the migration script.
+- [x] `config.yaml` — UPDATE. `hook_sanity_min_score` comment now flags it as INFORMATIONAL ONLY (binary gate post-Phase-4.5).
+- [x] `README.md` — UPDATE. Added the YouTube quota-increase audit-form section; replaced stale gameplay setup steps with `data/music/`; replaced the run-lock-deferred warning with the actual lock contract.
+
+### Loguru rotation
+- [x] Already wired in [src/observability/logging_setup.py:12-21](src/observability/logging_setup.py) (`rotation="00:00"`, `retention="30 days"`, `compression="zip"`). Phase 7 added the synthetic-trigger test only; production code unchanged.
+
+### Tenacity retry/backoff
+- [x] Policy at both sites: `stop_after_attempt(3)` + `wait_exponential(min=2, max=30)` + `retry_if_exception_type((socket.timeout, ConnectionError))`. `HttpError` intentionally NOT in the retry list (fails fast through existing handlers).
+- [x] Preserves the locked Phase 1 contract: `HttpError` records via `QuotaLedger`, `ConnectionError`/`socket.timeout` does NOT — even after 3 retries.
+- [x] Tests use `monkeypatch.setattr(<fn>.retry, "wait", tenacity.wait_none())` to skip the 2s..30s sleep; covers the 5 invariant cases (1 success record, transient-recover record-once, 3-fail no-record, HttpError fail-fast no-retry, check_or_raise exactly-once across retries).
+
+### Retention cleanup — kill switch flipped
+- [x] `run_all(dry_run=False)` now performs real deletion. `dry_run=True` writes nothing (Phase 5 isolation parity).
+- [x] Path safety: `_safe_unlink` resolves paths and refuses anything outside `cfg.abs_path(".")`. Out-of-root attempts emit a `retention_path_outside_root` alert.
+- [x] FileNotFoundError counted as `already_gone`, NOT a delete error (benign race).
+- [x] PermissionError / OSError go into `delete_errors` and emit a `retention_delete_errors` alert; sweep continues across remaining files.
+- [x] `dup_hashes` and `quota_usage` pruned via the same threshold math as the count helpers (no drift between count and delete).
+- [x] VACUUM gate: `data/.last_vacuum` sentinel file. Run only when `cfg.retention.vacuum_every_days` has elapsed (or sentinel missing).
+- [x] VACUUM runs on a freshly-opened standalone `sqlite3.connect`; on `OperationalError("database is locked")`, emits `vacuum_skipped` alert and leaves the sentinel mtime untouched so the next sweep retries.
+- [x] [src/weekly_run.py:88](src/weekly_run.py) now passes `dry_run=dry_run` to retention (was hard-coded `True`).
+
+### Per-run summary writer
+- [x] `logs/runs.md` table: `kind | started_at | finished_at | success | summary`. UTF-8 encoding. Pipes escaped, newlines collapsed.
+- [x] `weekly_run.run_weekly` appends in BOTH happy-path and `except` path (before re-raise). Summary built from existing `summary["stages"]` dict.
+- [x] `daily_upload.run_today` appends from THREE return points: orphan-abort (success=false), no-candidates (success=true), normal completion (success=true with outcome counts).
+
+### Run lock — `data/.weekly_run.lock`
+- [x] Single shared lock file; weekly_run + daily_upload + manual invocations all block on it.
+- [x] Hard-fail: contention → `RunLockHeld` → main() returns 2 + appends `lock_held` alert to `logs/alerts.md`. No DB access (entrypoint tests assert `connect` was never called).
+- [x] Phase 6 cross-process safety note in progress.md L567 retired — the gap is closed.
+
+### Selector placeholder leak guard
+- [x] Live regression observed on `cApYKxhFcm0` (Devil Wears Prada, Pivot.3 verification): qwen2.5:3b returned `<<=70 char title>>` literal as `suggested_title`. Phase 7 rejects via `re.search(r"<<.*?>>", title)` in `_validate_clips`.
+- [x] System prompt strengthened: "Do NOT include angle brackets, square brackets, or example placeholders like '<<...>>' in any field — write a real title."
+- [x] Stricter retry prompt now mentions the validation reason verbatim ("placeholder leaked into suggested_title for ...") so the model has a clear correction signal.
+
+### gameplay_* table drop
+- [x] DDL removed from `src/state/schema.sql`: `gameplay_cursor` CREATE TABLE, `gameplay_pointer` CREATE TABLE, and the `INSERT OR IGNORE INTO gameplay_pointer (id, next_index) VALUES (1, 0)` seed row. Replaced by a comment.
+- [x] `scripts/drop_gameplay_tables.py` — one-shot migration. `--dry-run` reports row counts; real run drops both tables. Idempotent (safe to re-run).
+- [x] User invokes manually post-merge: `python -m scripts.drop_gameplay_tables --config config.yaml --dry-run` → review → re-run without `--dry-run`.
+
+### hook_sanity_min_score config comment
+- [x] [config.yaml:50](config.yaml) comment updated to flag the field as INFORMATIONAL ONLY (binary accept/reject gate in `src/policy_gate/hook_sanity.py` since Phase 4.5; the value is no longer read by the runtime).
+
+### Alerts UTF-8 + datetime.utcnow fix
+- [x] `datetime.utcnow()` → `datetime.now(timezone.utc).strftime(...)` (deprecated in 3.12).
+- [x] Both `write_text` and `open("a")` now pass `encoding="utf-8"`. Non-ASCII messages round-trip cleanly.
+
+### README quota-audit section
+- [x] Replaced terse "Future quota-increase audit" stub with a 4-step Cloud Console walkthrough (URL path, audit-form requirement, 2–4 week approval window, `youtube_quota_ceiling_units` config knob).
+- [x] Stale `data/gameplay/{subway,minecraft,gta}.mp4` setup step replaced with `data/music/` royalty-free track guidance (matches Pivot.3 reality).
+- [x] Stale "A `flock`-style run lock is deferred to Phase 7" warning replaced with the actual Phase 7 lock contract.
+
+### Repository helpers — none added
+- [x] No new `repo.*` methods. Phase 7 doesn't add new billed API calls or new state-store queries.
+
+### Tests — 43 net new (457 total passing, up from 414 prior)
+- [x] `tests/test_alerts_writer.py` (3 new) — UTF-8 round-trip, UTC timestamp, pipe/newline escape.
+- [x] `tests/test_logging_rotation.py` (3 new) — handler created, write reaches `agent.log`, rotation/retention/compression configured on the FileSink.
+- [x] `tests/test_selector_ranker.py` (+2) — `<<.*>>` rejection + retry uses stricter prompt after placeholder leak.
+- [x] `tests/test_runs_writer.py` (5 new) — header creation, append after rows, pipe escape, newline strip, in-process two-thread best-effort (against pre-existing file).
+- [x] `tests/test_run_lock.py` (4 new) — release on normal exit, RunLockHeld on contended fd, release on exception inside block, sentinel file created if missing. Skipped on non-Windows.
+- [x] `tests/test_weekly_run.py` (+3) — `lock_held → exit 2 + no DB access`, `runs.md appended on success`, `runs.md appended on failure before reraise`. Existing `test_happy_path_calls_each_stage` updated for retention `dry_run=False` propagation.
+- [x] `tests/test_daily_upload_recovery.py` (+3) — `lock_held → exit 2 + no orphan reconcile`, `runs.md appended after run`, `runs.md appended on orphan abort`, `human_review gate at SQL boundary` (Phase 7 explicit re-regression).
+- [x] `tests/test_uploader_resumable.py` (+3) — transient-recover record-once, HttpError fail-fast no-retry, `check_or_raise` exactly-once across retries. Existing ConnectionError + socket.timeout tests updated to assert `next_chunk.call_count == 3`.
+- [x] `tests/test_quota_recording.py` (+3) — same retry-invariant matrix for `_call_with_ledger`.
+- [x] `tests/test_retention.py` (renamed from `test_retention_skeleton.py`; +9) — replaced the Phase 6 NotImplementedError test; added: deletes old raw with uploaded clips, preserves in-progress raw (the guard), prunes dup_hashes / quota_usage with exact threshold match, FileNotFoundError counted as already_gone (not error), PermissionError → delete_errors + alert + sweep continues, refuses path outside project root + alert, dry_run writes nothing (regression), VACUUM sentinel gate due-when-missing / not-due-when-recent, VACUUM busy → no sentinel touch + `vacuum_skipped` alert.
+- [x] `tests/test_drop_gameplay_tables.py` (3 new) — dry-run reports counts without drop, real run drops tables, idempotent on already-dropped DB.
+
+### Acceptance
+- [x] `pytest tests/` — **457 passing** (414 prior + 43 net new Phase 7).
+- [x] All locked contracts re-regression-verified:
+  - Idempotency: lock-held → hard fail (no queue, no DB writes).
+  - Conservative quota recording: HttpError records once, ConnectionError after 3 retries records zero times. `check_or_raise` exactly-once.
+  - Dry-run isolation: retention `dry_run=True` writes nothing.
+  - Human-review gate: `cfg.human_review=True` excludes `quality_pass` clips at the `repo.clips_for_upload_due` SQL boundary (explicit Phase 7 re-regression test).
+- [x] Loguru handler verified (rotation + retention + compression all configured on the FileSink).
+- [x] Selector rejects `<<.*>>` placeholder titles; retry prompt mentions the rejection reason verbatim.
+- [x] `gameplay_*` migration script idempotent; schema.sql DDL removed.
+
+### Live verification (post-merge, ordered)
+1. **Run lock smoke (synthetic concurrency):** open two terminals on the live machine.
+   - Terminal A: `python -m src.weekly_run --dry-run --config "C:/Users/cryptix/Documents/Media-Agent-main/config.yaml"`
+   - Terminal B (immediately): same command.
+   - Expect: B exits with code 2 + a `lock_held` row in `logs/alerts.md`. A completes normally.
+2. **Retention dry-run on live data:** `python -m src.retention --dry-run --config "...config.yaml"`. Inspect candidate counts before any real-mode run. The live `B0Ic4OK38mE` clip's raw video is the most likely candidate; verify it's still under the 14-day TTL OR confirm the user is OK deleting it.
+3. **Retention real-mode:** `python -m src.retention --config "...config.yaml"` (after step 2 inspection). Confirm `data/.last_vacuum` sentinel created on first run.
+4. **Per-run summary writer:** any `python -m src.weekly_run --dry-run` run writes one new `logs/runs.md` row (kind=weekly, success=true).
+5. **Tenacity retry sanity:** temporarily block `googleapis.com` via Windows Firewall outbound rule, run `python -m src.discovery --dry-run --keyword "famous movie clips"` → expect 3 retry attempts with exponential backoff in `logs/agent.log`, a clean failure, no `quota_usage` row written. Re-enable firewall rule afterward.
+6. **Alerts UTF-8 round-trip:** tail `logs/alerts.md` after step 1; confirm readable as UTF-8.
+7. **Drop-gameplay-tables migration:** `python -m scripts.drop_gameplay_tables --config "...config.yaml" --dry-run` → row counts. Then real run → tables dropped. Verify with `sqlite3 data/state.db ".tables"`.
+8. **Manual reminder:** delete `B0Ic4OK38mE` (Joe Rogan + Minecraft bridge clip, pre-pivot format) from the test YouTube channel before any external eyes see it.
+
+### Out of scope for Phase 7 (deferred)
+- OAuth refresh probe in `bootstrap --check`. Calibration findings note this as optional. Defer until a token expires silently.
+- Two-pass loudnorm in editor (Phase 4 follow-up). Only matters if `quality_screen` rejects too many clips on the ±0.5 LUFS gate.
+- Pivot.1 (`src/captions/`), Pivot.2 (selector caption-first reuse), Pivot.4 (banlist tune), Pivot.5 (live keyword sweep). Independent of Phase 7 hardening.
+- POSIX `fcntl.flock` fallback in `run_lock.py`. Single-machine Windows deployment.
+- Quota-increase audit-form filing itself — README documents the steps; the user files when ready.
 
 ## Phase 8 — Stretch (deferred)
 - [ ] Subject tracking (face/saliency-aware crop) replacing center-crop

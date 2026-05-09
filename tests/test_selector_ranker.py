@@ -152,3 +152,40 @@ def test_unreachable_then_recover(monkeypatch):
 def test_empty_windows_raises():
     with pytest.raises(rk.RankerError, match="no candidate windows"):
         rk.rank_windows([], model="m", top_n=2)
+
+
+# ---- placeholder leak guard (Phase 7, Pivot.3 live regression) --------------
+
+
+def test_validation_rejects_angle_bracket_placeholder_in_title(monkeypatch):
+    """Live (Pivot.3 cApYKxhFcm0): qwen2.5:3b can echo the rubric example
+    `<<=70 char title>>` placeholder as a literal title. Reject + retry.
+    On persistent failure: RankerError so the runner leaves the video at
+    'transcribed' and emits a rolled-up alert."""
+    bad = {"clips": [
+        {"candidate_id": "c0", "hook": "h", "suggested_title": "<<=70 char title>>", "score": 9.0},
+        {"candidate_id": "c1", "hook": "h", "suggested_title": "real title", "score": 8.0},
+    ]}
+    calls = _patch_post(monkeypatch, [_resp(bad), _resp(bad)])
+    with pytest.raises(rk.RankerError):
+        rk.rank_windows(_windows(3), model="m", top_n=2)
+    assert calls["n"] == 2
+    # Stricter retry prompt mentions the validation reason.
+    assert "placeholder leaked" in calls["prompts"][1]
+
+
+def test_retry_uses_stricter_prompt_after_placeholder_rejection(monkeypatch):
+    """First call returns a placeholder title; retry returns a clean title.
+    The runner gets the clean output."""
+    bad = {"clips": [
+        {"candidate_id": "c0", "hook": "h", "suggested_title": "<<title>>", "score": 9.0},
+        {"candidate_id": "c1", "hook": "h", "suggested_title": "B", "score": 8.0},
+    ]}
+    good = {"clips": [
+        {"candidate_id": "c0", "hook": "h", "suggested_title": "Great Hook", "score": 9.0},
+        {"candidate_id": "c1", "hook": "h", "suggested_title": "B", "score": 8.0},
+    ]}
+    _patch_post(monkeypatch, [_resp(bad), _resp(good)])
+    out = rk.rank_windows(_windows(3), model="m", top_n=2)
+    assert out[0].suggested_title == "Great Hook"
+    assert out[1].suggested_title == "B"

@@ -47,7 +47,11 @@ banlist:
   - "suicide"
   - "self-harm"
   - "racial slur"
-hook_sanity_min_score: 3                              # /5; rejects below
+hook_sanity_min_score: 3                              # INFORMATIONAL ONLY post-Phase-4.5.
+                                                       # qwen2.5:3b can't do reliable 1-5 ordinals,
+                                                       # so the gate was changed to binary
+                                                       # accept/reject in src/policy_gate/hook_sanity.py.
+                                                       # This value is no longer read by the runtime.
 profanity_max_score: 5                                # better-profanity scale; tune empirically
 
 # --- Quality ---

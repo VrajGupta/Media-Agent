@@ -5,7 +5,9 @@ Conservative quota recording (matches Google's billing):
 - HTTP response from Google (any status, including 4xx/5xx) → records.
 - Network failure before reaching Google (socket.timeout, ConnectionError) → no record.
 
-Tenacity retry/backoff is intentionally NOT added here — it's a Phase 7 task.
+Phase 7: tenacity retry on transient transport errors. Wraps the inner
+api_request.execute() only — check_or_raise runs exactly once, ledger.record
+runs at most once per logical attempt. HttpError fails fast (not retried).
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import socket
 from datetime import datetime, timedelta, timezone
 
+import tenacity
 from googleapiclient.errors import HttpError
 
 from src.quota_ledger import QuotaLedger
@@ -20,10 +23,21 @@ from src.quota_ledger import QuotaLedger
 ENDPOINT = "search.list"
 
 
+@tenacity.retry(
+    stop=tenacity.stop_after_attempt(3),
+    wait=tenacity.wait_exponential(min=2, max=30),
+    retry=tenacity.retry_if_exception_type((socket.timeout, ConnectionError)),
+    reraise=True,
+)
+def _execute_with_retry(api_request):
+    """Execute a googleapiclient request, retrying on transient transport errors only."""
+    return api_request.execute()
+
+
 def _call_with_ledger(api_request, ledger: QuotaLedger, units: int, endpoint: str):
     ledger.check_or_raise(units, endpoint)
     try:
-        response = api_request.execute()
+        response = _execute_with_retry(api_request)
     except HttpError:
         ledger.record(endpoint, units)
         raise

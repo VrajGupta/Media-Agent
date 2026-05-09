@@ -30,7 +30,9 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from src.config_loader import Config, load_config
-from src.observability import append_alert, setup_logging
+from src.observability import (
+    RunLockHeld, acquire_run_lock, append_alert, append_run_row, setup_logging,
+)
 from src.state import Repository, connect
 from src.uploader.publish_at import format_publish_at_iso_z
 
@@ -147,6 +149,17 @@ def run_today(
     logs_dir = cfg.abs_path(cfg.paths.logs_dir)
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
+    started_at_utc = datetime.now(timezone.utc)
+
+    def _emit_runs_row(success: bool, summary: str) -> None:
+        # Best-effort runs.md append. dry-run still records — runs.md is a
+        # signal of "this entrypoint executed", not "data was changed".
+        append_run_row(
+            logs_dir, kind="daily",
+            started_at=started_at_utc,
+            finished_at=datetime.now(timezone.utc),
+            success=success, summary=summary,
+        )
 
     # Phase 5's orphan-marker fence. Aborts with exit 4 on inconsistent state.
     ok, orphan_alerts = reconcile_orphans(repo=repo, cfg=cfg)
@@ -154,6 +167,7 @@ def run_today(
         for a in orphan_alerts:
             append_alert(logs_dir, kind="orphan_reconcile_required", message=a)
             print(a, file=sys.stderr)
+        _emit_runs_row(False, "orphan_reconcile_required")
         return ([], 4)
 
     flipped = reconcile_approvals(repo, cfg, dry_run=dry_run)
@@ -165,6 +179,7 @@ def run_today(
     rows = repo.clips_for_upload_due(end_of_today_iso, statuses=statuses)
     if not rows:
         logger.info("daily_upload: no candidates for today's window")
+        _emit_runs_row(True, "no_candidates")
         return ([], 0)
 
     results: List = []
@@ -232,6 +247,7 @@ def run_today(
         summary[key] = summary.get(key, 0) + 1
     summary_str = ", ".join(f"{k}={v}" for k, v in sorted(summary.items()))
     logger.info(f"daily_upload summary: {summary_str} (total={len(results)})")
+    _emit_runs_row(True, summary_str or "empty")
     return (results, 0)
 
 
@@ -265,7 +281,8 @@ def main() -> int:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    setup_logging(cfg.abs_path(cfg.paths.logs_dir))
+    logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+    setup_logging(logs_dir)
 
     db_path = cfg.abs_path(cfg.paths.state_db)
     if not db_path.exists():
@@ -275,27 +292,37 @@ def main() -> int:
         )
         return 1
 
-    conn = connect(db_path)
-    repo = Repository(conn)
-
+    # Phase 7: shared run lock with weekly_run + manual invocations.
+    lock_path = cfg.abs_path("data/.weekly_run.lock")
     try:
-        # Build expensive shared clients only in real-upload mode.
-        from src.quota_ledger import QuotaLedger
-        ledger = QuotaLedger(repo.conn, ceiling_units=int(cfg.youtube_quota_ceiling_units))
-        youtube = None
-        if not args.dry_run:
-            from src.integrations.youtube import build_youtube_client
-            youtube = build_youtube_client(cfg)
-        ollama_host = os.environ.get("OLLAMA_HOST")
+        with acquire_run_lock(lock_path):
+            conn = connect(db_path)
+            repo = Repository(conn)
+            try:
+                # Build expensive shared clients only in real-upload mode.
+                from src.quota_ledger import QuotaLedger
+                ledger = QuotaLedger(repo.conn, ceiling_units=int(cfg.youtube_quota_ceiling_units))
+                youtube = None
+                if not args.dry_run:
+                    from src.integrations.youtube import build_youtube_client
+                    youtube = build_youtube_client(cfg)
+                ollama_host = os.environ.get("OLLAMA_HOST")
 
-        results, code = run_today(
-            repo=repo, cfg=cfg, ledger=ledger, youtube=youtube,
-            dry_run=args.dry_run, ollama_host=ollama_host,
+                results, code = run_today(
+                    repo=repo, cfg=cfg, ledger=ledger, youtube=youtube,
+                    dry_run=args.dry_run, ollama_host=ollama_host,
+                )
+                _print_summary(results)
+                return code
+            finally:
+                conn.close()
+    except RunLockHeld:
+        append_alert(
+            logs_dir, kind="lock_held",
+            message="daily_upload skipped: another instance holds data/.weekly_run.lock",
         )
-        _print_summary(results)
-        return code
-    finally:
-        conn.close()
+        logger.warning("daily_upload: lock_held; another instance is running")
+        return 2
 
 
 if __name__ == "__main__":

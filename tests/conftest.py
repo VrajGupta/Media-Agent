@@ -206,4 +206,4 @@ class StubConfig:
     def abs_path(self, rel: str):
         from pathlib import Path
         p = Path(rel)
-        return p if p.is_absolute() else (Path.cwd() / p)
+        return p if p.is_absolute() else (self.project_root / p)

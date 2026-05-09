@@ -9,7 +9,7 @@ Stack: Python 3.11+ · ffmpeg+NVENC · faster-whisper (CUDA) · Ollama (qwen2.5:
 1. **Install Python 3.11+**, ffmpeg with NVENC support, and CUDA 12.x + cuDNN 9 runtime.
 2. **Install Ollama** from <https://ollama.com/download>, then `ollama pull qwen2.5:3b-instruct`.
 3. Create a Google Cloud project, enable YouTube Data API v3, create an **OAuth 2.0 Desktop client**, download the JSON, save as `data/client_secret.json`.
-4. Acquire 3 background gameplay videos (~10 min each) and place them at `data/gameplay/{subway,minecraft,gta}.mp4`.
+4. Drop a few royalty-free background tracks (phonk / lo-fi / etc.) into `data/music/` as `.mp3 / .m4a / .wav / .flac / .ogg`. The editor picks one deterministically per clip (sha1 of `clip_id` modulo).
 5. ```
    python -m venv .venv
    .venv\Scripts\activate
@@ -29,8 +29,8 @@ Stack: Python 3.11+ · ffmpeg+NVENC · faster-whisper (CUDA) · Ollama (qwen2.5:
 | `config.yaml` | All tunables (cadence, keywords, models, retention, paths). |
 | `data/state.db` | SQLite — single source of truth for pipeline state. |
 | `data/raw/*.mp4` | Downloaded long-form sources (14-day TTL). |
-| `data/transcripts/*.json` | Whisper output, cached. |
-| `data/gameplay/*.mp4` | User-supplied background pool. |
+| `data/transcripts/*.json` | Whisper / caption-cache output, cached. |
+| `data/music/*.{mp3,m4a,wav,flac,ogg}` | User-supplied royalty-free background tracks (gitignored; pool is local). |
 | `output/pending/` | Rendered clips awaiting review (when `human_review=true`) or upload (when `false`). |
 | `output/approved/` | User-approved clips eligible for upload. |
 | `output/rejected/` | User-rejected pile (30-day TTL). |
@@ -83,14 +83,31 @@ schtasks /Delete /TN MediaAgentWeekly       /F
 schtasks /Delete /TN MediaAgentDailyUpload  /F
 ```
 
-**Important — do not run `weekly_run` and `daily_upload` simultaneously.**
-The Task Scheduler triggers (Sunday 02:00 SGT vs daily 09:00 SGT) are
-non-overlapping by design; manual concurrent invocation could let
-`daily_upload` see a clip in the brief gap between `slot_planner`'s DB
-commit and its file rename. A `flock`-style run lock is deferred to
-Phase 7.
+**Concurrent-invocation safety (Phase 7).** `weekly_run`, `daily_upload`,
+and any manual invocation of either share a single advisory file lock at
+`data/.weekly_run.lock` (Windows `msvcrt.locking`). A second invocation
+while the first is mid-run exits with code 2 and a `lock_held` row in
+`logs/alerts.md` — never a queue, never an overlap.
 
-## Future quota-increase audit
+## Requesting a YouTube quota increase
 
-YouTube Data API default quota is 10,000 units/day → ~6 inserts/day cap. If you submit the API Services audit and Google grants more, the daily upload run can collapse into the weekly one. Form lives in Cloud Console → APIs & Services → YouTube Data API v3 → Quotas → "Apply for higher quota."
-# Media-Agent
+The default YouTube Data API v3 daily quota is 10,000 units, which caps
+this project at ~6 uploads/day (1,600 units/insert + ~400 units of search
++ enrichment overhead per `weekly_run`). To upload more than ~6/day,
+request a quota increase:
+
+1. Cloud Console → APIs & Services → YouTube Data API v3 → Quotas.
+2. Click the pencil icon on the **Queries per day** row → **Apply for
+   higher quota**.
+3. The form requires:
+   - Channel URL.
+   - Description of how the API will be used.
+   - Privacy policy URL.
+   - An audit form link (Google sends this after the initial request —
+     it covers content moderation, takedowns, copyright, acceptable use).
+4. Approval typically takes 2–4 weeks. Until approved, the
+   `quota_ledger` keeps daily usage under 9,000 units (the `youtube_quota_ceiling_units`
+   guard in `config.yaml`).
+
+Once approved, `daily_upload`'s role collapses into `weekly_run` — no
+longer needed to spread uploads across days to fit under the 10k cap.

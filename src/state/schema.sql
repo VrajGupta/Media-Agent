@@ -67,19 +67,10 @@ CREATE TABLE IF NOT EXISTS runs (
     summary_json       TEXT
 );
 
-CREATE TABLE IF NOT EXISTS gameplay_cursor (
-    file_name          TEXT PRIMARY KEY,
-    last_offset_s      REAL NOT NULL DEFAULT 0,
-    file_duration_s    REAL,
-    last_used_at       TEXT
-);
-
-CREATE TABLE IF NOT EXISTS gameplay_pointer (
-    -- single-row table: which file is next in the round-robin
-    id                 INTEGER PRIMARY KEY CHECK (id = 1),
-    next_index         INTEGER NOT NULL DEFAULT 0
-);
-INSERT OR IGNORE INTO gameplay_pointer (id, next_index) VALUES (1, 0);
+-- Phase 7: gameplay_cursor + gameplay_pointer were retained as no-op tables
+-- after Pivot.3 dropped split-screen / gameplay-rotation. Phase 7 removes the
+-- DDL outright since no live runtime code touches them. Populated DBs from
+-- prior phases are migrated by `python -m scripts.drop_gameplay_tables`.
 
 CREATE TABLE IF NOT EXISTS quota_usage (
     date               TEXT NOT NULL,                -- YYYY-MM-DD in UTC

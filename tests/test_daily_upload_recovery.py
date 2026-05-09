@@ -232,6 +232,112 @@ def test_human_review_false_uploads_quality_pass_directly(tmp_path):
     assert upload_calls == ["qp"]
 
 
+def test_lock_held_exits_2_no_orphan_reconcile(tmp_path, monkeypatch):
+    """Phase 7: when the run lock is held, daily_upload.main() returns 2,
+    appends a lock_held alert, and never calls reconcile_orphans / connects
+    to the DB."""
+    import src.daily_upload as du
+    from src.observability.run_lock import RunLockHeld
+
+    cfg = StubConfig(tmp_path)
+    Path(cfg.paths.state_db).write_text("")
+
+    def _fake_load_config(path):
+        return cfg
+
+    def _raising_acquire(_lock_path):
+        raise RunLockHeld("test held")
+
+    connect_called = {"n": 0}
+
+    def _fake_connect(*args, **kwargs):
+        connect_called["n"] += 1
+        raise AssertionError("connect must NOT be called when lock is held")
+
+    monkeypatch.setattr(du, "load_config", _fake_load_config)
+    monkeypatch.setattr(du, "acquire_run_lock", _raising_acquire)
+    monkeypatch.setattr(du, "connect", _fake_connect)
+    monkeypatch.setattr("sys.argv", ["src.daily_upload"])
+
+    rc = du.main()
+    assert rc == 2
+    assert connect_called["n"] == 0
+    alerts_md = (Path(cfg.paths.logs_dir) / "alerts.md").read_text(encoding="utf-8")
+    assert "lock_held" in alerts_md
+    assert "daily_upload skipped" in alerts_md
+
+
+def test_runs_md_appended_after_run(tmp_path):
+    """Phase 7: daily_upload appends a logs/runs.md row at the end of run_today."""
+    repo = _new_repo(tmp_path)
+    cfg = StubConfig(tmp_path, human_review=True)
+    _seed_video(repo)
+    _seed_clip(repo, clip_id="approved_clip", status="approved",
+               publish_at_utc="2026-05-03T01:00:00Z")
+
+    def _fake_reconcile_orphans(*, repo, cfg):
+        return (True, [])
+
+    def _fake_upload_one_clip(**kwargs):
+        return UploadResult(clip_id=kwargs["clip_id"],
+                            outcome=UploadOutcome.uploaded, youtube_video_id="ytX")
+
+    with patch("src.uploader.runner.reconcile_orphans", _fake_reconcile_orphans), \
+         patch("src.uploader.runner.upload_one_clip", _fake_upload_one_clip):
+        run_today(
+            repo=repo, cfg=cfg, ledger=object(), youtube=object(),
+            now_utc=datetime(2026, 5, 3, 4, 0, tzinfo=timezone.utc),
+        )
+    runs_md = (Path(cfg.paths.logs_dir) / "runs.md").read_text(encoding="utf-8")
+    assert "# Runs" in runs_md
+    assert "| daily |" in runs_md
+    assert "true" in runs_md
+    assert "uploaded=1" in runs_md
+
+
+def test_runs_md_appended_on_orphan_abort(tmp_path):
+    """Phase 7: orphan-reconcile abort path also appends a runs.md row (success=false)."""
+    repo = _new_repo(tmp_path)
+    cfg = StubConfig(tmp_path)
+    _seed_video(repo)
+    _seed_clip(repo, clip_id="x")
+
+    def _fake_reconcile_orphans(*, repo, cfg):
+        return (False, ["orphan_reconcile_required: 1 inconsistent marker"])
+
+    with patch("src.uploader.runner.reconcile_orphans", _fake_reconcile_orphans):
+        results, code = run_today(
+            repo=repo, cfg=cfg, ledger=object(), youtube=object(),
+            now_utc=datetime(2026, 5, 3, 4, 0, tzinfo=timezone.utc),
+        )
+    assert code == 4
+    runs_md = (Path(cfg.paths.logs_dir) / "runs.md").read_text(encoding="utf-8")
+    assert "| daily |" in runs_md
+    assert "false" in runs_md
+
+
+def test_human_review_gate_at_sql_boundary_phase_7_regression(tmp_path):
+    """Phase 7 explicit re-regression on the human-review contract.
+
+    With human_review=True, repo.clips_for_upload_due (the SQL boundary that
+    enforces the gate) returns ONLY 'approved' clips even when both 'approved'
+    and 'quality_pass' clips have publish_at_utc within today's window.
+    Prevents future Phase 7 daily_upload edits from accidentally widening the
+    whitelist."""
+    repo = _new_repo(tmp_path)
+    cfg = StubConfig(tmp_path, human_review=True)
+    _seed_video(repo)
+    _seed_clip(repo, clip_id="qp_clip", status="quality_pass",
+               publish_at_utc="2026-05-03T01:00:00Z")
+    _seed_clip(repo, clip_id="approved_clip", status="approved",
+               publish_at_utc="2026-05-03T02:00:00Z")
+
+    statuses = ("approved",) if cfg.human_review else ("quality_pass", "approved")
+    rows = repo.clips_for_upload_due("2026-05-03T23:59:59Z", statuses=statuses)
+    clip_ids = sorted(r["clip_id"] for r in rows)
+    assert clip_ids == ["approved_clip"], f"human-review gate widened: {clip_ids}"
+
+
 def test_dry_run_does_not_persist(tmp_path):
     repo = _new_repo(tmp_path)
     cfg = StubConfig(tmp_path, human_review=True)

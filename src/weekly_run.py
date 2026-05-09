@@ -27,12 +27,15 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Any, Callable, List, Tuple
 
 from loguru import logger
 
 from src.config_loader import Config, load_config
-from src.observability import append_alert, setup_logging
+from src.observability import (
+    RunLockHeld, acquire_run_lock, append_alert, append_run_row, setup_logging,
+)
 from src.state import Repository, connect
 
 
@@ -85,9 +88,24 @@ def _build_pipeline(
         ("slot_planner",
          lambda: slot_planner.run_all(repo, cfg, dry_run=dry_run)),
         ("retention",
-         lambda: retention.run_all(repo, cfg, dry_run=True)),
+         lambda: retention.run_all(repo, cfg, dry_run=dry_run)),
     ]
     return pipeline
+
+
+def _build_runs_md_summary(summary: dict) -> str:
+    """One-line summary string for logs/runs.md row."""
+    stages = summary.get("stages") or {}
+    bits = []
+    for stage_name, stage_summary in stages.items():
+        if isinstance(stage_summary, dict) and "count" in stage_summary:
+            bits.append(f"{stage_name}={stage_summary['count']}")
+        else:
+            bits.append(stage_name)
+    base = "stages={" + ", ".join(bits) + "}"
+    if "error" in summary:
+        base += f"; error={summary['error']}"
+    return base
 
 
 def run_weekly(
@@ -101,6 +119,7 @@ def run_weekly(
 ) -> Tuple[bool, dict]:
     """Run the weekly pipeline. Returns (success, summary)."""
     logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+    started_at_utc = datetime.now(timezone.utc)
     run_id = repo.start_run(kind="weekly")
     summary: dict[str, Any] = {"stages": {}, "dry_run": dry_run}
     pipeline = _build_pipeline(
@@ -118,6 +137,11 @@ def run_weekly(
             logs_dir, kind="weekly_run_finished",
             message=f"weekly_run finished; stages={list(summary['stages'].keys())}",
         )
+        append_run_row(
+            logs_dir, kind="weekly",
+            started_at=started_at_utc, finished_at=datetime.now(timezone.utc),
+            success=True, summary=_build_runs_md_summary(summary),
+        )
     except Exception as exc:
         success = False
         summary["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -125,6 +149,11 @@ def run_weekly(
         append_alert(
             logs_dir, kind="weekly_run_failed",
             message=summary["error"],
+        )
+        append_run_row(
+            logs_dir, kind="weekly",
+            started_at=started_at_utc, finished_at=datetime.now(timezone.utc),
+            success=False, summary=_build_runs_md_summary(summary),
         )
         raise
     return (success, summary)
@@ -146,7 +175,8 @@ def main() -> int:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    setup_logging(cfg.abs_path(cfg.paths.logs_dir))
+    logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+    setup_logging(logs_dir)
 
     db_path = cfg.abs_path(cfg.paths.state_db)
     if not db_path.exists():
@@ -156,29 +186,40 @@ def main() -> int:
         )
         return 1
 
-    conn = connect(db_path)
-    repo = Repository(conn)
-
+    # Phase 7: cross-process run lock. weekly_run, daily_upload, and any manual
+    # invocation all serialize on data/.weekly_run.lock. Hard fail if held.
+    lock_path = cfg.abs_path("data/.weekly_run.lock")
     try:
-        # Build expensive shared clients once for the whole run.
-        from src.integrations.youtube import build_youtube_client
-        from src.quota_ledger import QuotaLedger
-        youtube = build_youtube_client(cfg)
-        ledger = QuotaLedger(repo.conn, ceiling_units=int(cfg.youtube_quota_ceiling_units))
-        ollama_host = os.environ.get("OLLAMA_HOST")
+        with acquire_run_lock(lock_path):
+            conn = connect(db_path)
+            repo = Repository(conn)
+            try:
+                # Build expensive shared clients once for the whole run.
+                from src.integrations.youtube import build_youtube_client
+                from src.quota_ledger import QuotaLedger
+                youtube = build_youtube_client(cfg)
+                ledger = QuotaLedger(repo.conn, ceiling_units=int(cfg.youtube_quota_ceiling_units))
+                ollama_host = os.environ.get("OLLAMA_HOST")
 
-        success, summary = run_weekly(
-            repo=repo, cfg=cfg, dry_run=args.dry_run,
-            youtube=youtube, ledger=ledger, ollama_host=ollama_host,
+                success, summary = run_weekly(
+                    repo=repo, cfg=cfg, dry_run=args.dry_run,
+                    youtube=youtube, ledger=ledger, ollama_host=ollama_host,
+                )
+                print(json.dumps(summary, indent=2))
+                return 0 if success else 1
+            except Exception:
+                # Already alerted + run row closed inside run_weekly. Re-raise
+                # printed to stderr by the interpreter is fine; CLI exits 1.
+                return 1
+            finally:
+                conn.close()
+    except RunLockHeld:
+        append_alert(
+            logs_dir, kind="lock_held",
+            message="weekly_run skipped: another instance holds data/.weekly_run.lock",
         )
-        print(json.dumps(summary, indent=2))
-        return 0 if success else 1
-    except Exception:
-        # Already alerted + run row closed inside run_weekly. Re-raise printed
-        # to stderr by the interpreter is fine; CLI exits non-zero.
-        return 1
-    finally:
-        conn.close()
+        logger.warning("weekly_run: lock_held; another instance is running")
+        return 2
 
 
 if __name__ == "__main__":

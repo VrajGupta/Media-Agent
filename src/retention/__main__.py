@@ -1,11 +1,13 @@
-"""Phase 6 retention CLI.
+"""Phase 7 retention CLI.
 
 Examples:
-    python -m src.retention --dry-run            # always dry-run in Phase 6
+    python -m src.retention --dry-run            # enumerate candidates, no deletion
+    python -m src.retention                      # REAL MODE: actually delete
     python -m src.retention --config alt.yaml
 
-Real deletion is reserved for Phase 7. The CLI prints the candidate list
-so the user can sanity-check what would be removed.
+By default (no flag), this performs real deletion. Pass --dry-run to
+inspect candidates first. The CLI mirrors the rest of the project: real
+mode is the default, dry-run is opt-in.
 
 Exit codes:
     0  ok
@@ -29,8 +31,7 @@ def main() -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        default=True,
-        help="(default in Phase 6) enumerate candidates without deleting",
+        help="enumerate candidates without deleting (default: real mode)",
     )
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
@@ -49,19 +50,23 @@ def main() -> int:
     conn = connect(db_path)
     repo = Repository(conn)
     try:
-        result = run_all(repo, cfg, dry_run=True)
+        result = run_all(repo, cfg, dry_run=args.dry_run)
     finally:
         conn.close()
 
+    label = "dry-run candidates" if args.dry_run else "real-mode results"
     print()
-    print("retention candidates (Phase 6 dry-run; Phase 7 enables deletion):")
-    print(f"  raw videos:          {len(result.would_delete_raw)}")
-    print(f"  transcripts:         {len(result.would_delete_transcripts)}")
-    print(f"  output/pending:      {len(result.would_delete_output_pending)}")
-    print(f"  output/approved:     {len(result.would_delete_output_approved)}")
-    print(f"  output/rejected:     {len(result.would_delete_output_rejected)}")
-    print(f"  dup_hashes (rows):   {result.would_prune_dup_hashes}")
-    print(f"  quota_usage (rows):  {result.would_prune_quota_usage}")
+    print(f"retention sweep ({label}):")
+    print(f"  raw videos:          would={len(result.would_delete_raw)}  deleted={result.deleted_raw}")
+    print(f"  transcripts:         would={len(result.would_delete_transcripts)}  deleted={result.deleted_transcripts}")
+    print(f"  output/pending:      would={len(result.would_delete_output_pending)}  deleted={result.deleted_output_pending}")
+    print(f"  output/approved:     would={len(result.would_delete_output_approved)}  deleted={result.deleted_output_approved}")
+    print(f"  output/rejected:     would={len(result.would_delete_output_rejected)}  deleted={result.deleted_output_rejected}")
+    print(f"  dup_hashes (rows):   would={result.would_prune_dup_hashes}  pruned={result.pruned_dup_hashes}")
+    print(f"  quota_usage (rows):  would={result.would_prune_quota_usage}  pruned={result.pruned_quota_usage}")
+    print(f"  vacuum:              due={result.would_vacuum}  ran={result.vacuumed}")
+    print(f"  already_gone:        {result.already_gone}")
+    print(f"  delete_errors:       {len(result.delete_errors)}")
     return 0
 
 

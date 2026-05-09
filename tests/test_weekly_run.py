@@ -58,7 +58,8 @@ def test_happy_path_calls_each_stage(tmp_path):
     p_ed.assert_called_once_with(repo, cfg, dry_run=False)
     p_qs.assert_called_once_with(repo, cfg, dry_run=False)
     p_sp.assert_called_once_with(repo, cfg, dry_run=False)
-    p_ret.assert_called_once_with(repo, cfg, dry_run=True)
+    # Phase 7: retention now honors --dry-run propagation (was hard-coded True in Phase 6).
+    p_ret.assert_called_once_with(repo, cfg, dry_run=False)
 
 
 def test_dry_run_skips_downloader(tmp_path):
@@ -162,6 +163,89 @@ def test_stage_failure_halts_and_records_error(tmp_path):
     # Failure alert appended.
     alerts_md = (Path(cfg.paths.logs_dir) / "alerts.md").read_text()
     assert "weekly_run_failed" in alerts_md
+
+
+def test_lock_held_exits_2_no_db_access(tmp_path, monkeypatch):
+    """Phase 7: when the run lock is held, weekly_run.main() returns 2,
+    appends a lock_held alert, and never opens the DB."""
+    import src.weekly_run as wr
+    from src.observability.run_lock import RunLockHeld
+
+    cfg = StubConfig(tmp_path)
+    # Pre-create state.db so the existence check passes.
+    Path(cfg.paths.state_db).write_text("")
+
+    def _fake_load_config(path):
+        return cfg
+
+    def _fake_acquire(_lock_path):
+        raise RunLockHeld("test held")
+
+    connect_called = {"n": 0}
+
+    def _fake_connect(*args, **kwargs):
+        connect_called["n"] += 1
+        raise AssertionError("connect must NOT be called when lock is held")
+
+    monkeypatch.setattr(wr, "load_config", _fake_load_config)
+    monkeypatch.setattr(wr, "acquire_run_lock", lambda p: _fake_acquire(p))
+    monkeypatch.setattr(wr, "connect", _fake_connect)
+    monkeypatch.setattr("sys.argv", ["src.weekly_run"])
+
+    rc = wr.main()
+    assert rc == 2
+    assert connect_called["n"] == 0
+    alerts_md = (Path(cfg.paths.logs_dir) / "alerts.md").read_text(encoding="utf-8")
+    assert "lock_held" in alerts_md
+    assert "weekly_run skipped" in alerts_md
+
+
+def test_runs_md_appended_on_success(tmp_path):
+    """Phase 7: weekly_run appends a logs/runs.md row on success."""
+    repo = _new_repo(tmp_path)
+    cfg = StubConfig(tmp_path)
+    with patch("src.discovery.run_all", return_value=[1, 2]), \
+         patch("src.downloader.run_all", return_value=[]), \
+         patch("src.lang_detect.run_all", return_value=[]), \
+         patch("src.selector.run_all", return_value=[]), \
+         patch("src.policy_gate.run_all", return_value=[]), \
+         patch("src.editor.run_all", return_value=[]), \
+         patch("src.quality_screen.run_all", return_value=[]), \
+         patch("src.slot_planner.run_all", return_value=[]), \
+         patch("src.retention.run_all", return_value=MagicMock(dry_run=True)):
+        run_weekly(repo=repo, cfg=cfg, youtube=object(), ledger=object())
+
+    runs_md = (Path(cfg.paths.logs_dir) / "runs.md").read_text(encoding="utf-8")
+    assert "# Runs" in runs_md
+    assert "| weekly |" in runs_md
+    assert "true" in runs_md
+    assert "discovery=2" in runs_md
+
+
+def test_runs_md_appended_on_failure_before_reraise(tmp_path):
+    """Phase 7: failure path also appends a runs.md row before re-raising."""
+    repo = _new_repo(tmp_path)
+    cfg = StubConfig(tmp_path)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("editor blew up")
+
+    with patch("src.discovery.run_all", return_value=[]), \
+         patch("src.downloader.run_all", return_value=[]), \
+         patch("src.lang_detect.run_all", return_value=[]), \
+         patch("src.selector.run_all", return_value=[]), \
+         patch("src.policy_gate.run_all", return_value=[]), \
+         patch("src.editor.run_all", side_effect=_boom), \
+         patch("src.quality_screen.run_all"), \
+         patch("src.slot_planner.run_all"), \
+         patch("src.retention.run_all"):
+        with pytest.raises(RuntimeError):
+            run_weekly(repo=repo, cfg=cfg, youtube=object(), ledger=object())
+
+    runs_md = (Path(cfg.paths.logs_dir) / "runs.md").read_text(encoding="utf-8")
+    assert "| weekly |" in runs_md
+    assert "false" in runs_md
+    assert "RuntimeError" in runs_md
 
 
 def test_finish_run_receives_string_not_dict(tmp_path):

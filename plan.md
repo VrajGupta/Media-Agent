@@ -401,23 +401,28 @@ Exit codes: 0 = ok, 1 = config/db missing, 2 = clip-id not found.
 - All single-process, SQLite as state. Graceful resume on partial failure.
 - **Acceptance:** weekly_run produces 28 ready clips; daily_upload publishes 4/day for 7 days with no missed slots when PC online; missed-slot recovery exercised.
 
-## Phase 7 — Hardening (Day 9–10)
-- Structured logging (`loguru`) → `logs/agent.log`, daily rotation, 30-day retention.
-- Retry with backoff (`tenacity`) on API/network errors; quarantine on repeated failure.
-- **Alerts file** (`logs/alerts.md`): weekly run finished, run failure, quota > 80% used, upload rejected, missed-slot recovery. Markdown table; user reads on demand. (No Discord webhook — filesystem-based alerting only.)
-- **Retention/cleanup module** at end of `weekly_run`:
-  - `data/raw/*.mp4` → delete 14 days post-download or after all derived clips uploaded, whichever later.
-  - `data/transcripts/*.json` → 90-day TTL.
-  - `output/pending/*.mp4` → delete 7 days after `uploaded` confirmed.
-  - `dup_hashes` rows older than 90 days pruned.
-  - SQLite `VACUUM` monthly.
-- Per-run summary appended to `logs/runs.md`.
-- Config-driven (`config.yaml`): keywords, `clips_per_day`, `days_per_run`, `upload_slots`, `timezone`, `human_review`, `banlist`, model sizes, paths.
+## Phase 7 — Hardening (Day 9–10) — COMPLETE
+- Structured logging (`loguru`) → `logs/agent.log`, daily rotation, 30-day retention. (Wired in Phase 6; Phase 7 added the synthetic-trigger test.)
+- Retry with backoff (`tenacity`) on transient transport errors in `src/uploader/resumable.py` + `src/discovery/search.py`. Wraps a private inner driver so `check_or_raise` runs exactly once and ledger.record runs at most once per logical attempt. `HttpError` fails fast (not retried).
+- **Alerts file** (`logs/alerts.md`): UTF-8 + UTC fix landed; new alert kinds added: `lock_held`, `retention_path_outside_root`, `retention_delete_errors`, `vacuum_skipped`.
+- **Retention/cleanup module** — kill-switch flipped, `dry_run=False` now performs real deletion:
+  - `data/raw/*.mp4` → delete 14 days post-download AND every derived clip uploaded.
+  - `data/transcripts/*.json` → 90-day TTL by mtime.
+  - `output/pending/*.mp4` + `output/approved/*.mp4` → 7 days post-upload.
+  - `output/rejected/*.mp4` → 30-day TTL.
+  - `dup_hashes` and `quota_usage` rows older than 90 days pruned.
+  - SQLite `VACUUM` once per `cfg.retention.vacuum_every_days` (sentinel-gated). `SQLITE_BUSY` → `vacuum_skipped` alert + sentinel left untouched for next-week retry.
+  - Path safety: every candidate resolved + verified under project root before unlink.
+- Per-run summary appended to `logs/runs.md` from `weekly_run.run_weekly` (success + failure paths) and `daily_upload.run_today` (orphan-abort, no-candidates, normal-completion paths).
+- **Run lock** — `data/.weekly_run.lock` via `msvcrt.locking`. `weekly_run` + `daily_upload` + manual invocations all share this single lock. Contention → `RunLockHeld` → exit 2 + `lock_held` alert. Closes the slot-planner DB-committed/rename-crashed gap.
+- **Selector** — `<<.*>>` placeholder leak guard in `_validate_clips` + stricter system prompt.
+- **Schema housekeeping** — `gameplay_cursor` + `gameplay_pointer` CREATE blocks removed from `schema.sql`. One-shot migration at `scripts/drop_gameplay_tables.py`.
+- **`config.yaml`** — `hook_sanity_min_score` comment updated to flag the field as informational only post-Phase-4.5 binary gate.
 - **Windows Task Scheduler** entries committed as `.xml` exports under `scripts/`:
   - `weekly_run.xml` — Sundays 02:00 local TZ.
   - `daily_upload.xml` — daily 09:00 local TZ.
-- Document quota-increase audit form steps in `README.md`.
-- **Acceptance:** logs rotate; `logs/alerts.md` rows appear on synthetic triggers (run failure, quota > 80%, upload reject, missed-slot recovery); cleanup deletes correct files; double-running `weekly_run` is a no-op.
+- README quota-increase audit-form section landed; stale `data/gameplay/` setup steps replaced with `data/music/`.
+- **Acceptance:** 457 tests passing; all four locked contracts (idempotency, conservative quota recording, dry-run isolation, human-review gate) explicitly re-regression-tested. See `progress.md` Phase 7 section for the full live-verification checklist.
 
 ## Phase 8 — Stretch (post-v1)
 - Thumbnail auto-generation.

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -23,6 +24,8 @@ import requests
 from loguru import logger
 
 from src.selector.windows import Window
+
+_PLACEHOLDER_RE = re.compile(r"<<.*?>>")
 
 DEFAULT_HOST = "http://localhost:11434"
 TIMEOUT_SECONDS = 60.0
@@ -41,7 +44,9 @@ SYSTEM_PROMPT = (
     '{"clips": [{"candidate_id": "<id>", "hook": "<one-line attention grab>", '
     '"suggested_title": "<<=70 char title>", "score": <0-10 float>}, ...]}. '
     "Pick the top N as instructed. Use ONLY candidate_ids that appear in the "
-    "input. Never invent timestamps."
+    "input. Never invent timestamps. "
+    "Do NOT include angle brackets, square brackets, or example placeholders "
+    "like '<<...>>' in any field — write a real title."
 )
 
 
@@ -135,6 +140,14 @@ def _validate_clips(
             raise ValueError(f"missing/empty hook for {cid}")
         if not isinstance(title, str) or not title.strip():
             raise ValueError(f"missing/empty suggested_title for {cid}")
+        if _PLACEHOLDER_RE.search(title):
+            # Live regression (Pivot.3 verification on cApYKxhFcm0):
+            # Ollama can echo the rubric example placeholder "<<=70 char title>>"
+            # as a literal title. Reject so the runner retries with a stricter
+            # prompt; persistent failures leave the video at 'transcribed'.
+            raise ValueError(
+                f"placeholder leaked into suggested_title for {cid}: {title!r}"
+            )
         try:
             score = float(c.get("score", 0.0))
         except (TypeError, ValueError):
