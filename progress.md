@@ -748,10 +748,85 @@ Zero banlist or profanity triggers.
 - POSIX `fcntl.flock` fallback in `run_lock.py`. Single-machine Windows deployment.
 - Quota-increase audit-form filing itself — README documents the steps; the user files when ready.
 
-## Phase 8 — Stretch (deferred)
+## Phase 8 — Stretch (deferred indefinitely — superseded by Pivot.6 direction)
 - [ ] Subject tracking (face/saliency-aware crop) replacing center-crop
 - [ ] Thumbnail auto-generation
 - [ ] A/B title testing
 - [ ] TikTok / Reels integration
 - [ ] Web dashboard
 - [ ] File YouTube quota-increase audit form
+
+---
+
+## Pivot.6 — AI-Generated "Unsettling Facts" Shorts (current, started 2026-05-16)
+
+**Direction:** Replace all source-video ingestion with AI-generated content (Zack D. Films–style "weird/unsettling facts"). Canonical plan: `.claude/plans/you-re-picking-up-the-expressive-abelson.md`.
+**Reason:** Movie-clip format (Pivot.0–5) carried too-high copyright-strike risk. AI generation differentiates the channel and eliminates Content ID exposure.
+**Stack additions:** Kling AI (provider-abstracted), Edge TTS (`edge-tts`), Ollama repurposed as script writer.
+**Modules retired:** `discovery/`, `downloader/`, `lang_detect/`, `selector/`, `weekly_run.py`.
+**Modules added:** `scripter/`, `ai_gen/`, `narration/`, `assembler/` (replaces `editor/`), `gen_run.py`.
+**Modules updated (input contract / schema):** `state/`, `uploader/` (templating), `policy_gate/` (input), `quality_screen/` (skip density/confidence), `quota_ledger/` (provider dimension), `subtitles/` (line-at-a-time), `retention/` (new TTLs), `bootstrap.py`.
+
+### Pivot.6.0 — Reality Sync (doc-only, no code risk)
+- [x] Rewrite `CLAUDE.md` for Pivot.6 direction (2026-05-16)
+- [x] Rewrite `agents.md` with module retire/keep/new/change status (2026-05-16)
+- [x] Open Pivot.6 section in `progress.md` (2026-05-16)
+- [ ] Supersede `plan.md`; archive old contents to `plan.archive.md`
+- [ ] Update `skills.md` (add Kling AI, Edge TTS; mark yt-dlp as legacy)
+- [ ] Cancel 2 queued movie-clip uploads (clear `publish_at_utc`, set status `cancelled`)
+- [ ] Delete 5 live movie-clip Shorts from test channel (manual, YouTube Studio)
+- [ ] **Acceptance:** docs cold-start readable; test channel empty; no clips in `clips_for_upload()` queue
+
+### Pivot.6.1 — Provider Adapter Skeleton + Kling Spike
+- [ ] `src/ai_gen/base.py` — `Provider` ABC: `submit`, `poll`, `download`, `last_cost_cents`
+- [ ] `src/ai_gen/kling.py` — Kling concrete impl; tenacity retry; API key from `KLING_API_KEY`
+- [ ] `src/ai_gen/runner.py` — submit/poll concurrently (asyncio max 2), persist `generation_jobs`, cost to `quota_usage(provider='kling')`
+- [ ] **Spike:** 10 hand-written prompts → eyeball vs Zack D. Films reference → provider swap decision logged
+- [ ] `tests/ai_gen/` — ≥10 unit tests (submit, poll, download, cost recording, concurrent limit)
+- [ ] **Acceptance:** 10 sample shots downloaded; average cost within `per_clip_cost_cents_max / shots_per_clip_max`; user signs off on aesthetic
+
+### Pivot.6.2 — Script / Scene Builder
+- [ ] `src/scripter/runner.py` — topic seed → Ollama JSON-mode → pydantic-validated `{title, narration, shots[], style_notes}`
+- [ ] Rubric: hook in first 8 words, ~75 words narration, 4–6 shots ≤10 s, no phobias/graphic medical/self-harm
+- [ ] Persist to `scripts` table; stub `clips` row (`content_kind='ai_generated'`)
+- [ ] Policy gate runs on `script.narration` + `script.title`; retry up to `retry_on_policy_reject`
+- [ ] `tests/scripter/` — ≥10 unit tests
+- [ ] **Acceptance:** 20 sample scripts pass eyeball QA; policy rejection ≤30%
+
+### Pivot.6.3 — Schema Bridge
+- [ ] `ALTER TABLE clips ADD COLUMN content_kind TEXT NOT NULL DEFAULT 'sourced'`
+- [ ] `ALTER TABLE clips ADD COLUMN script_id TEXT` (nullable FK → scripts)
+- [ ] Relax `clips.video_id` to nullable
+- [ ] `CREATE TABLE scripts (...)` (see plan for full DDL)
+- [ ] `CREATE TABLE generation_jobs (...)` (see plan for full DDL)
+- [ ] `ALTER TABLE quota_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'youtube'`
+- [ ] New `repository.py` helpers: `insert_script`, `insert_generation_job`, `update_job_status`, `clips_for_generation_run`, `get_clip_with_script`
+- [ ] `pytest tests/state/` green post-migration
+- [ ] `daily_upload.py --dry-run` on existing `quality_pass` clip still produces correct body (regression test)
+- [ ] **Acceptance:** migration applied to DB copy; tests green; uploader dry-run unchanged for `sourced` clips
+
+### Pivot.6.4 — Render / Subtitle Integration
+- [ ] `src/narration/runner.py` — Edge TTS → mp3; Whisper forced-align → word timings dict
+- [ ] `src/subtitles/ass_writer.py` — replace karaoke with line-at-a-time (≤28 chars/line, `\pos(540,1500)`, fade-in 100 ms); archive old writer to `_karaoke_legacy.py`
+- [ ] `src/assembler/runner.py` — concat shots → mux narration → music-bed duck → ASS burn → NVENC 1080×1920 → 2-pass −14 LUFS; reuse `editor/music.py`, `editor/ffmpeg_runner.py`, `editor/slug.py`
+- [ ] Delete blurred-bg filtergraph path from `editor/` (or rename entire dir to `assembler/`)
+- [ ] `tests/narration/`, `tests/assembler/` — unit tests
+- [ ] **Acceptance:** one clip rendered end-to-end from hand-written script; user visual QA
+
+### Pivot.6.5 — Gate / Quality Refit + Compliance
+- [ ] `policy_gate/runner.py` — accept `(clip_text=narration, recheck_title=script.title)`; tune `topic_filter` for new pool
+- [ ] `quality_screen/` — skip `density.py` and `confidence.py` for `ai_generated` clips
+- [ ] `uploader/templater.py` — branch on `content_kind`: AI-gen description drops Source/channel attribution; adds `Generated with {provider}` + disclosure footer
+- [ ] `uploader/insert_body.py` — research + set `altered_content` flag; manual Studio fallback if API field not exposed
+- [ ] `quota_ledger/ledger.py` — `provider` dimension through `record()` / `check_or_raise()`; daily Kling spend ceiling
+- [ ] `pytest tests/policy_gate tests/quality_screen tests/uploader` green
+- [ ] **Acceptance:** dry-run JSON shows correct AI-gen description + disclosure flag
+
+### Pivot.6.6 — Dry-Run to Scheduled Upload
+- [ ] `gen_run.py` — full orchestrator: loop `clips_per_day × days_per_run`; run lock + `runs.md`; `--dry-run` and `--clips N` flags
+- [ ] `bootstrap.py --check` — verify `KLING_API_KEY`, `edge-tts`, ffmpeg concat, Ollama, Whisper, NVENC; drop `yt-dlp` check
+- [ ] `gen_run.py --dry-run --clips 1` — complete pending mp4 without uploading
+- [ ] `gen_run.py --clips 3` → user drag-approve → `daily_upload.py` → 3 Shorts on test channel
+- [ ] Monitor 48 h: `logs/alerts.md` + YouTube Studio (no Content ID flags) + Kling dashboard (cost ≈ ledger ±5%)
+- [ ] Retention TTL config updated (`ai_gen_shots` 7 d, `narration` 14 d; remove `raw_video`, `transcripts`)
+- [ ] **Acceptance:** 3 AI-generated Shorts live; user signs off to scale to `clips_per_day=4`

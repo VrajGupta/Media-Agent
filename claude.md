@@ -1,108 +1,110 @@
 # Project Context — Media Agent
 
 ## What this project is
-A fire-and-forget Python agent that automates a "movie clip Shorts" YouTube channel. It searches YouTube by keyword for movie-clip reuploader videos, finds the most viral 30–60s moments, reformats them as 1080×1920 Shorts (full-screen original frame on a blurred background extension + word-by-word burned subtitles), and uploads 2–6/day to a single YouTube channel on a fixed cadence.
+A fire-and-forget Python agent that automates an **AI-generated "weird/unsettling facts" YouTube Shorts channel** (Zack D. Films–style). A weekly run drives:
+1. **Script generation** — local Ollama (`qwen2.5:3b-instruct`) emits a `{title, narration, shots[]}` JSON script from a topic-seed pool (weird biology, deep sea, weird history, unsettling animal facts, rare natural phenomena — **not phobias**).
+2. **Video generation** — Kling AI text-to-video (provider-abstracted; Pika 2.0 / MiniMax-Hailuo are drop-in swaps) renders 4–6 stitched 5–10 s shots in native 1080×1920.
+3. **Narration** — Edge TTS (`en-US-GuyNeural`, free) produces the voiceover; Whisper forced-align provides word timings.
+4. **Assembly** — ffmpeg concat → mux narration → music-bed duck/mix → ASS line-at-a-time subtitle burn → NVENC encode → 2-pass LUFS normalize.
+5. **Upload** — same backbone as before: slot-planner spreads `publish_at_utc` over 7 days; daily Task Scheduler run uploads via YouTube Data API v3 with `publishAt` + AI-disclosure flag.
 
-**Content pivot 2026-05-04:** the channel was previously a "podcast/highlight + Subway gameplay split-screen" format. The pivot to movie clips drops the split-screen entirely, drops the gameplay rotation system, adds a YouTube-CC-first transcript path, and acknowledges meaningfully higher copyright-strike risk. See `progress.md` Pivot.0–Pivot.5 for the rewrite checklist and the plan archive in `.claude/plans/` for the full pivot rationale.
+**Cadence:** 2–6 clips/day to a single channel on a fixed cadence.
 
-## Scope (v1)
-- **Source:** third-party long-form videos, transformatively reformatted.
+**Content pivot history:** v1 was "podcast/highlight + Subway gameplay split-screen" (Phases 0–4). Pivot.0–5 (2026-05-04 → 2026-05-12) swapped to "movie clips" (single full-screen + blurred-bg + karaoke subs). **Pivot.6 (2026-05-16, current)** drops sourced video entirely in favour of AI-generated content — the copyright-strike risk on first-party studio content was too high, and AI generation differentiates the channel. The canonical Pivot.6 plan is `.claude/plans/you-re-picking-up-the-expressive-abelson.md`.
+
+## Scope (Pivot.6)
+- **Source:** AI-generated visuals + AI-synthesized narration. No third-party video ingestion.
 - **Output platform:** YouTube Shorts only. TikTok and Instagram are explicitly out of scope.
+- **AI disclosure:** every upload carries the "altered/synthetic content" attestation (YouTube creator policy, March 2024+). Description footer notes "Made with AI."
 - **Mode:** fully autonomous in steady state. `human_review=true` is locked on for the first 2 weeks (filesystem-based; user drags approved clips from `output/pending/` → `output/approved/`).
-- **Operational model (Path B — hybrid):**
-  - **Weekly heavy run** — `weekly_run.py` triggered by Windows Task Scheduler once a week, ~1h. Discovers, downloads, selects, renders, and assigns each clip a `publish_at` timestamp spread across the next 7 days.
-  - **Daily upload run** — `daily_upload.py` triggered by Windows Task Scheduler once a day, ~5 min. Uploads that day's clips to YouTube with `privacyStatus=private` + `publishAt=<slot>`, letting YouTube auto-publish at the slot.
+- **Operational model (Path B — hybrid, unchanged from v1):**
+  - **Weekly heavy run** — `gen_run.py` (replaces `weekly_run.py`) triggered by Windows Task Scheduler once a week. Scripts → generates → narrates → assembles → screens → slots → retains, assigning each clip a `publish_at` timestamp spread across the next 7 days.
+  - **Daily upload run** — `daily_upload.py` triggered by Windows Task Scheduler once a day, ~5 min. Uploads that day's clips to YouTube with `privacyStatus=private` + `publishAt=<slot>` + altered-content flag, letting YouTube auto-publish at the slot.
   - This split exists because YouTube's default API quota allows only ~6 inserts/day. Quota-increase audit is a future task; once approved, the daily run collapses into the weekly run.
-- **Development & runtime:** the user's Windows laptop (single machine). Code is developed and run on the same PC; no separate dev/runtime environments. Earlier docs referenced a Mac development host — that's stale; ignore it.
+- **Development & runtime:** the user's Windows laptop (single machine). Code is developed and run on the same PC; no separate dev/runtime environments.
 
 ## Stack
-Python 3.11+ · ffmpeg+NVENC · yt-dlp · faster-whisper (CUDA) · YouTube Data API v3 · Ollama (`qwen2.5:3b-instruct`, local) · Windows Task Scheduler · SQLite. See `skills.md` for the full rationale. **Cost: $0/month.**
+Python 3.11+ · ffmpeg+NVENC · **Kling AI** (paid; provider-abstracted) · **Edge TTS** (free) · faster-whisper (CUDA, forced-alignment role only post-Pivot.6) · YouTube Data API v3 · Ollama (`qwen2.5:3b-instruct`, local — now script writer, not clip ranker) · Windows Task Scheduler · SQLite. See `skills.md` for the full rationale. **Cost: Kling API only (target ≤ $150/mo at 28 clips/week); everything else is free.**
 
-## Architecture in one diagram (v1.2 — post-content-pivot)
+## Architecture in one diagram (Pivot.6)
 ```
 [Windows Task Scheduler — weekly]
-   └─ weekly_run.py:
-        keywords → discovery (quota_ledger) → downloader (mp4 + json3 caption sidecars)
-                → lang_detect → captions (yt-dlp CC parse → cached JSON v2)
-                → selector (caption-first reuse OR Whisper fallback + heatmap-or-fallback + Ollama qwen2.5:3b)
-                → policy_gate (banlist / profanity / NSFW / hook-sanity / topic_filter)
-                → editor (ffmpeg + NVENC + split + gblur + overlay + ASS karaoke)
+   └─ gen_run.py:
+        topic seed pool → scripter (Ollama → {title, narration, shots[], style} JSON, persisted to scripts)
+                → policy_gate (banlist / profanity / NSFW / hook-sanity / topic_filter on narration + title)
+                → ai_gen (Kling text-to-video × 4–6 shots, async max_concurrent=2, persisted to generation_jobs)
+                → narration (Edge TTS → mp3; Whisper forced-align → per-word timings)
+                → assembler (ffmpeg concat → mux narration → music duck/mix → ASS line-centered burn → NVENC 1080×1920 → 2-pass −14 LUFS)
                   → output/pending/__unscheduled__{clip_id}__{slug}.mp4
-                → quality_screen (speech density, sub-conf, pHash + audio dedup, loudness)
+                → quality_screen (duration + loudness + pHash dedup; density+confidence skipped for TTS-clean audio)
                 → slot_planner (TZ-aware, publish_at_utc) → renames to {date}__slot_{HHMM}__{slug}.mp4
-                → retention (cleanup + VACUUM)
+                → retention (cleanup + VACUUM; new TTLs for ai_gen_shots + narration)
 [user, ad-hoc]  drag from output/pending/ → output/approved/  (only while human_review=true)
 
 [Windows Task Scheduler — daily]
    └─ daily_upload.py:
-        files in output/approved/ (or output/pending/ if human_review=false) with publish_at_utc ∈ today
-                → policy_gate (re-check)
-                → uploader (videos.insert + publishAt, orphan-marker fence, --dry-run aware) → YouTube
+        clips with publish_at_utc ∈ today and content_kind='ai_generated'
+                → policy_gate (re-check on script.narration)
+                → uploader (videos.insert + publishAt + altered_content flag, orphan-marker fence, --dry-run aware) → YouTube
                                   ↑
-                          state.db (SQLite)
+                          state.db (SQLite — clips.content_kind branches uploader templating)
                                   ↑
                   observability (loguru → logs/agent.log + logs/alerts.md) ← every stage
 ```
 
-## v1.1 changes (folded from external critique)
-- New modules: `lang_detect/`, `policy_gate/`, `quality_screen/`, `quota_ledger/`, `retention/`, `observability/`, `slot_planner/`.
-- Concrete virality formula (see `agents.md` discovery section / `executive_plan.md` §5.1).
-- `mostReplayed` fallback validation rule (warn at <70% hit rate; spot-check quality gap).
+## Operational invariants preserved across pivots
+- New modules introduced over time: `lang_detect/`, `policy_gate/`, `quality_screen/`, `quota_ledger/`, `retention/`, `observability/`, `slot_planner/` (Phase 4.5–7), **then Pivot.6 added** `scripter/`, `ai_gen/`, `narration/`, `assembler/` (replacing `editor/`) and **retired** `discovery/`, `downloader/`, `lang_detect/`, `selector/`.
 - TZ semantics: canonical `timezone` from config, `zoneinfo` for DST, `publish_at_utc` stored UTC, missed-slot recovery batches stale → next future slot, future-too-near pad of 20 min.
-- Quota ledger meters every billed call; weekly run aborts before exceeding 9,000 units/day.
-- Per-phase acceptance criteria added to `plan.md`.
-- Retention TTLs: raw 14 d, transcripts 90 d, queue 7 d post-upload, dup_hashes/quota_usage 90 d, monthly VACUUM.
-- Observability: filesystem-based — `loguru` → `logs/agent.log`, append-only `logs/alerts.md` for run failure / quota near-cap / upload reject / missed-slot recovery / weekly finished.
-- `--dry-run` mode on uploader; `bootstrap --check` for env health.
-- Crop = **center crop** in v1; subject tracking deferred to Phase 8.
+- Quota ledger meters every billed call across providers (`youtube` for `videos.insert`, `kling` for per-shot cost cents). Weekly run aborts before exceeding the configured ceilings.
+- Retention TTLs (Pivot.6): `ai_gen_shots/` 7 d post-render, `narration/` 14 d, `scripts` rows 90 d, `dup_hashes` / `quota_usage` 90 d, queue 7 d post-upload, monthly VACUUM. `raw_video` / `transcripts` TTLs retired (no longer produced).
+- Observability: filesystem-based — `loguru` → `logs/agent.log`, append-only `logs/alerts.md` for run failure / quota near-cap / upload reject / missed-slot recovery / weekly finished / kling spend near cap.
+- `--dry-run` mode on uploader and `gen_run.py`; `bootstrap --check` verifies KLING_API_KEY + edge-tts + Ollama + ffmpeg+NVENC + Whisper.
+- Run lock (`data/.weekly_run.lock`) + tenacity retry on transient HTTP at every billed boundary (Phase 7).
 Each stage is independent and idempotent, communicating via the SQLite state store. See `agents.md` for module-by-module detail.
 
 ## Where things live
-- `plan.md` — phased build plan, day-by-day.
-- `agents.md` — module responsibilities and data flow.
-- `skills.md` — libraries/APIs and the reasoning behind each.
+- `.claude/plans/you-re-picking-up-the-expressive-abelson.md` — **canonical Pivot.6 plan** (authoritative).
+- `plan.md` — superseded by the plan above; see `plan.archive.md` for historical phases.
+- `agents.md` — module responsibilities and data flow (updated for Pivot.6).
+- `skills.md` — libraries/APIs and the reasoning behind each (updated for Pivot.6).
 - `progress.md` — running checklist; **update after every completed task.**
-- `src/` — code (Phase 0 modules in place: `config_loader/`, `state/`, `quota_ledger/`, `observability/`, `bootstrap.py`).
-- `config.yaml` — runtime config (committed). `.env` — secrets (gitignored). `data/client_secret.json` + `data/oauth_token.json` — YouTube OAuth (gitignored).
+- `src/` — code. Active Pivot.6 modules: `scripter/`, `ai_gen/`, `narration/`, `assembler/`, `policy_gate/`, `quality_screen/`, `slot_planner/`, `uploader/`, `retention/`, `observability/`, `quota_ledger/`, `state/`, `config_loader/`, `bootstrap.py`, `gen_run.py`, `daily_upload.py`.
+- `config.yaml` — runtime config (committed). `.env` — secrets (`KLING_API_KEY` + YouTube OAuth env; gitignored). `data/client_secret.json` + `data/oauth_token.json` — YouTube OAuth (gitignored).
 
-## Decisions already locked
-- Engagement signal = YouTube `mostReplayed` heatmap + transcript-driven LLM ranking (local Ollama `qwen2.5:3b-instruct`, JSON-mode, fixed rubric prefix).
-- Vertical layout (post-pivot) = full-screen movie clip on a blurred-background extension. Foreground 1080×608 (preserves the 16:9 frame, no edge crop), background = the same source scaled-to-cover + gaussian-blur (sigma=20). No split-screen; no gameplay.
-- Subtitles = karaoke-style word-by-word, burned via ASS + libass. Position: `\pos(540, 1500)` (~78% down) so they sit clear of the centered 16:9 foreground band.
-- Transcripts (post-pivot) = YouTube CC track preferred when available (manual word-level via JSON3 → skip Whisper); auto/line-interp captions fall back to Whisper. Schema_version=2 with `timing_source` and per-word `confidence_source`.
-- Default cadence: 4 clips/day × 7 days = 28 clips/week. Configurable via `clips_per_day` and `days_per_run`.
-- 4/day stays well under the 10k-unit/day quota (4 × 1,600 = 6,400 units, 1,000-unit headroom).
-- `gameplay_cursor` and `gameplay_pointer` tables retained in `schema.sql` for backward compat but DEPRECATED post-pivot — no code reads or writes them.
-
-## Hardware (locked)
-- Windows PC: i9-11900H, 32 GB DDR4, 1 TB SSD, RTX 3070 laptop GPU (8 GB VRAM).
-- Whisper: `large-v3` int8_float16 on CUDA. Render: `h264_nvenc`.
-
-## Content inputs (locked)
-- **Keywords (post-pivot):** "best movie scenes", "iconic movie moments", "movie clips 4k" — rotated. Old keywords (Joe Rogan / stoicism / NBA highlights) are archived; the existing 156 downloaded videos are inert (different keyword) and will age out via Phase 7 retention.
-- **Background:** none — full-screen pivot, source video covers the entire frame on a blurred extension of itself. No gameplay pool, no rotation.
-- **Caption sources:** yt-dlp manual captions (preferred) → yt-dlp auto-captions → Whisper fallback. See agents.md §3 for the decision rule.
-
-## Locked decisions (post-redesign)
-- **Stack is fully free.** Anthropic API removed. Local LLM via **Ollama** (`qwen2.5:3b-instruct`, q4_K_M ≈ 2 GB VRAM) handles ranking, NSFW classification, and hook-sanity checks. Runs alongside Whisper on the 8 GB RTX 3070.
-- **`human_review = true` for first 2 weeks.** Mechanism is filesystem-based, not Discord:
-  - Rendered clips → `output/pending/{YYYY-MM-DD}__{slot_HHMM}__{title_slug}.mp4`
+## Locked decisions (Pivot.6)
+- **Content kind:** `ai_generated`. No source-video ingestion. `clips.content_kind='ai_generated'` gates uploader templating.
+- **Vertical layout:** native 9:16 from Kling — no blurred-bg filtergraph needed. Shots are already 1080×1920.
+- **Subtitles:** centered line-at-a-time ASS burn. Position `\pos(540, 1500)`. Word timings from Whisper forced-align on TTS mp3.
+- **Narration:** Edge TTS `en-US-GuyNeural`, rate `-8%`, pitch `-2Hz`. Whisper `large-v3` int8_float16 on CUDA for alignment.
+- **Generator:** Kling AI, 5 s/shot, 4–6 shots/clip → ~30 s clip. Style suffix: "3D animated, Pixar-shaded surface, surreal cinematic lighting, vertical 9:16, photoreal textures with stylized characters, dark moody atmosphere".
+- **Script writer:** Ollama `qwen2.5:3b-instruct` JSON-mode. Topic pool: weird_biology, deep_sea, weird_history, unsettling_animal_facts, rare_natural_phenomena. **Not phobias.**
+- **Default cadence:** 4 clips/day × 7 days = 28 clips/week. Configurable via `clips_per_day` and `days_per_run`.
+- **`human_review = true` for first 2 weeks.** Mechanism is filesystem-based:
+  - Assembled clips → `output/pending/{YYYY-MM-DD}__{slot_HHMM}__{title_slug}.mp4`
   - User reviews in Explorer, drags approved files → `output/approved/`
   - Daily uploader pulls from `output/approved/` while review is on; from `output/pending/` directly after week 2.
 - **Canonical timezone:** `Asia/Singapore`.
-- **No Discord, no webhooks.** Failures and recoveries append to `logs/alerts.md`. User reads the file when convenient.
-- **No Anthropic key. No paid services. Total cost: $0.**
+- **No Discord, no webhooks.** Failures and recoveries append to `logs/alerts.md`.
+- **AI disclosure:** `compliance.ai_disclosure=true` in config. Upload description footer: "Made with AI. For entertainment / educational use." YouTube `altered_content` flag set on `videos.insert` where the v3 API exposes it; manual Studio attestation as fallback if the API field is not yet exposed.
+
+## Hardware (locked)
+- Windows PC: i9-11900H, 32 GB DDR4, 1 TB SSD, RTX 3070 laptop GPU (8 GB VRAM).
+- Whisper: `large-v3` int8_float16 on CUDA (forced-alignment role, post-Pivot.6). Render: `h264_nvenc`.
+
+## Content generation (Pivot.6)
+- **Topic seeds:** rotated round-robin from `scripter.topic_pool` in config.
+- **Kling shots:** submitted concurrently (max 2 in-flight). Cost tracked per shot in `quota_usage(provider='kling', units=cost_cents)`. Daily spend ceiling enforced (`ai_gen.daily_spend_cents_ceiling`).
+- **Provider abstraction:** `src/ai_gen/base.py` defines a `Provider` ABC. Swap to Pika 2.0 or MiniMax by adding a concrete impl — no downstream pipeline changes.
 
 ## Working agreement
-- Plan files are authoritative; touch them when scope changes.
-- Build phase by phase per `plan.md`. Don't skip phases.
+- Plan files are authoritative; touch them when scope changes. The canonical plan is `.claude/plans/you-re-picking-up-the-expressive-abelson.md`.
+- Build sub-pivot by sub-pivot per that plan. Don't skip sub-pivots.
 - Update `progress.md` immediately when a task completes — don't batch.
 - No code written until the user confirms the plan.
 
-## Risk acknowledgement
-This channel format carries **elevated** copyright-strike risk after the movie-clip pivot. Major studios (Disney/WB/Universal) operate aggressive Content ID + manual takedown teams; transformative-format defense (short clip + reframe + burned subtitles) is **weak** against first-party studio content. The user has acknowledged this via `cfg.copyright_acknowledgement="movie_clips_v1"`. Mitigations:
-- Short clips (≤60 s, enforced).
-- Transformative format: full-screen + blurred-bg extension + burned subtitles + reframing to 9:16 (preserves the original 16:9 inside the 9:16 frame).
-- Heavy source attribution in upload description (`Source: <url>` + `Original channel: <name>`).
-- **Recommended ops mitigation:** run the first 2–3 weeks against a separate test channel before pointing OAuth at production.
-- Prefer older / cult / international films when curating keyword variants.
+## Risk acknowledgement (Pivot.6)
+AI-generated content eliminates the movie-clip copyright-strike risk. Residual risks:
+- **Kling API cost overrun.** Mitigated by `per_clip_cost_cents_max` and `daily_spend_cents_ceiling` enforced in `quota_ledger`. Agent aborts if projection exceeds ceiling.
+- **Generator aesthetic drift.** The Pivot.6.1 spike validates 10 sample shots before committing. Provider abstraction allows a half-day swap if output quality is insufficient.
+- **Edge TTS throttling.** Microsoft rate-limits the free endpoint unannounced. Tenacity retry + `pyttsx3` offline fallback as degraded mode.
+- **YouTube AI-disclosure API gaps.** YouTube's `altered_content` UI toggle (required March 2024+) may not be fully exposed in the v3 insert API. Research at Pivot.6.5; manual Studio attestation as fallback.

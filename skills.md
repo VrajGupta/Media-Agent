@@ -1,27 +1,37 @@
 # Tools, Libraries & APIs
 
+> **Pivot.6 (current):** yt-dlp and mostReplayed are no longer used. Ollama's role has shifted from clip-ranker to script-writer. New additions: Kling AI (video generator), edge-tts (TTS narration), Whisper now used for forced-alignment of TTS output rather than source-video transcription.
+
 ## Language & Runtime
-- **Python 3.11+** — best ecosystem fit for yt-dlp, ffmpeg wrappers, Whisper, and Google API client. Single-language project keeps the 1–2 week build realistic.
-- **ffmpeg** (system binary) — every editing operation. Must be on PATH.
+- **Python 3.11+** — best ecosystem fit for all project dependencies. Single-language project.
+- **ffmpeg** (system binary, Gyan 8.1-full_build) — concat, mux, loudnorm, ASS burn, NVENC encode. Must be on PATH.
 
-## Video Acquisition
-- **`yt-dlp`** (Python API) — gold standard for YouTube downloads, handles auto-subs, format selection, throttling. Active maintenance vs deprecated `youtube-dl`.
+## AI Video Generation (NEW — Pivot.6)
+- **Kling AI** (REST API, `KLING_API_KEY`) — text-to-video generator. Native 9:16 output at 1080×1920. Supports 5–10 s shot duration. Provider is abstracted behind `src/ai_gen/base.Provider` ABC so Pika 2.0 or MiniMax-Hailuo can be swapped in with ~½-day effort. Chosen over Runway Gen-3 (too cinematic) and Pika (less 3D-animated quality) after the Pivot.6.1 spike.
+- **Cost model:** per-second pricing; ~$50–$150/mo at 28 clips/week × 30 s. Enforced by `per_clip_cost_cents_max` + `daily_spend_cents_ceiling` in `quota_ledger`.
 
-## Discovery & Upload
-- **YouTube Data API v3** via **`google-api-python-client`** — official, documented, supported. Used for `search.list`, `videos.list`, `videos.insert`.
-- **`google-auth-oauthlib`** — handles OAuth desktop flow; refresh-token caching means we authenticate once.
-- **`requests`** — for the unofficial `mostReplayed` endpoint (`youtubei/v1/player`) when needed.
+## TTS Narration (NEW — Pivot.6)
+- **`edge-tts`** (PyPI, free) — Microsoft Azure neural TTS via the unofficial public endpoint. No API key required. Voice `en-US-GuyNeural` (calm male). Rate `-8%`, pitch `-2Hz`.
+- Why free over ElevenLabs: user requirement is zero additional paid services. Edge TTS quality is acceptable for this format; robotic quality is partially mitigated by the rate/pitch tweaks.
+- **Degraded-mode fallback:** `pyttsx3` (offline, SAPI5 voices) if Edge TTS throttles. Quality is lower but non-blocking.
 
-## Transcription
-- **`faster-whisper`** — 4× faster than reference Whisper, supports 8-bit/CTranslate2, runs on CPU acceptably and CUDA fast. Word-level timestamps are first-class. Local = zero API cost.
-- Model choice: `large-v3` `int8_float16` on CUDA — fits in 8 GB VRAM with headroom on the RTX 3070.
-- Requires CUDA 12.x + cuDNN 9 on the PC; install via `pip install faster-whisper` and the matching NVIDIA runtime libs.
+## Video Acquisition (LEGACY — not used in Pivot.6)
+- **`yt-dlp`** (Python API) — was used for YouTube source-video downloads and caption sidecar retrieval (Phases 1–7, Pivots.0–5). Retained in `requirements.txt` but no code path calls it in Pivot.6. Will be removed when the `discovery/` and `downloader/` modules are fully deleted.
 
-## Clip Selection / Policy / Hook-Sanity (LLM)
-- **Ollama** running locally on the PC, model **`qwen2.5:3b-instruct`** (q4_K_M ≈ 2 GB VRAM). Fits the RTX 3070 alongside Whisper. JSON-mode output for structured rubric responses.
-- Used for: clip ranking, NSFW transcript classifier, and "does this title accurately summarize the clip?" sanity check.
-- Why local: user requirement is a fully free stack. Ollama runs as a background service on Windows, exposes `http://localhost:11434`, handles model loading/unloading, kv-cache prefix reuse covers the prompt-cached-rubric pattern.
-- Quality note: 3B-class instruct models are fine for rubric-style scoring and binary classification on short transcripts. If quality is insufficient after first 2-week review, swap to `qwen2.5:7b-instruct` (q4_K_M ≈ 5 GB VRAM) by changing one config line.
+## Upload
+- **YouTube Data API v3** via **`google-api-python-client`** — used for `videos.insert` (resumable upload) with `publishAt` + `altered_content` flag. `search.list` and `videos.list` no longer called (discovery retired in Pivot.6).
+- **`google-auth-oauthlib`** — handles OAuth desktop flow; refresh-token cached at `data/oauth_token.json`.
+- **`requests`** — HTTP client for Ollama API calls and (previously) `mostReplayed` heatmap endpoint.
+
+## Transcription / Forced Alignment (ROLE CHANGED — Pivot.6)
+- **`faster-whisper`** — now used exclusively for **forced alignment**: run on the Edge TTS mp3 output to extract per-word timings for the subtitle writer. No longer used on source video (no source video). Model: `large-v3` `int8_float16` on CUDA. Fits the RTX 3070 with headroom.
+- Requires CUDA 12.x + cuDNN 9 on the PC (already installed).
+
+## Script Writing / Policy / Hook-Sanity (LLM — ROLE CHANGED — Pivot.6)
+- **Ollama** running locally on the PC, model **`qwen2.5:3b-instruct`** (q4_K_M ≈ 2 GB VRAM). Fits the RTX 3070 alongside Whisper. JSON-mode output.
+- **Old role (Pivots.0–5):** clip ranking, NSFW transcript classifier, hook-vs-content sanity check.
+- **New role (Pivot.6):** script writer — given a topic seed, produces `{title, narration, shots[], style_notes}` JSON. NSFW classifier and hook-sanity check still run, now on the generated narration + title.
+- Quality note: 3B-class instruct models are sufficient for rubric-style script generation. Swap to `qwen2.5:7b-instruct` (≈ 5 GB VRAM) by changing one config line if quality is inadequate.
 
 ## Editing & Rendering
 - **`ffmpeg-python`** (or raw subprocess) — composes the vstack + crop + subtitle-burn + loudnorm filtergraph in a single pass for speed.
@@ -64,14 +74,17 @@
 - **`ruff`** — lint + format in one binary.
 
 ## What we are *not* using and why
-- **MoviePy** — too slow, abstracts away the ffmpeg filtergraph we need fine control over.
-- **OpenCV** — not needed; ffmpeg handles all the cropping/scaling.
-- **APScheduler / Celery / Redis / Postgres** — overkill given Windows Task Scheduler + native YouTube `publishAt` cover the scheduling needs.
-- **Learned dedup model (CLIP / video embeddings)** — `imagehash` + audio fingerprint is sufficient at this scale (28 clips/week, 90-day window ≈ 360 entries). A learned model would add a GPU dependency and training pipeline for ~zero accuracy gain at 90-day, single-channel scope.
-- **Email-on-critical alerting / Discord webhooks** — `logs/alerts.md` is sufficient for v1 (single-user, on-demand reading); push-notification setup is friction without proportional value while the user is actively monitoring the channel.
-- **TikTok / Instagram SDKs** — out of scope for v1 per user.
-- **Cloud transcription (AssemblyAI, Deepgram)** — local Whisper is good enough and free.
+- **MoviePy** — too slow; abstracts away the ffmpeg filtergraph we need fine control over.
+- **OpenCV** — not needed; ffmpeg handles all cropping/scaling.
+- **APScheduler / Celery / Redis / Postgres** — overkill; Windows Task Scheduler + native YouTube `publishAt` cover the scheduling needs.
+- **Learned dedup model (CLIP / video embeddings)** — `imagehash` pHash is sufficient at this scale. A learned model adds GPU dependency + training pipeline for ~zero accuracy gain at 90-day, single-channel scope.
+- **Email-on-critical alerting / Discord webhooks** — `logs/alerts.md` is sufficient for v1 (single-user, on-demand reading).
+- **TikTok / Instagram SDKs** — out of scope per user.
+- **Cloud transcription (AssemblyAI, Deepgram)** — local Whisper is free and accurate enough for forced-alignment on clean TTS audio.
+- **ElevenLabs / OpenAI TTS** — Edge TTS is free; paid TTS adds a second paid dependency. Revisit if voice quality is inadequate.
+- **Runway Gen-3 / Sora** — Runway is expensive and cinematic-skewed (weak for 3D-animated); Sora is not publicly accessible via API.
 
-## Cost Model
-- yt-dlp / Whisper / Ollama / ffmpeg / YouTube API: all free
-- **Total: $0/month.** Stack is fully free per user requirement.
+## Cost Model (Pivot.6)
+- Edge TTS / Whisper / Ollama / ffmpeg / YouTube API: all **free**
+- **Kling AI:** ~$50–$150/mo at 28 clips/week × 30 s/clip. Only paid service.
+- **Total: ~$50–$150/month** depending on Kling pricing tier and shot duration.
