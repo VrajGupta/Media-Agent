@@ -25,5 +25,8 @@ better-profanity>=0.7.0
 # audio fingerprinting (chromaprint binary must be installed system-wide; pip pkg is the python bindings)
 pyacoustid>=1.3.0
 
+# Kling AI video generation (Pivot.6)
+PyJWT>=2.8.0
+
 # dev / testing
 pytest>=8.0.0
