@@ -19,8 +19,9 @@ content because of a flaky model.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from src.policy_gate import banlist as banlist_mod
 from src.policy_gate import hook_sanity as hook_mod
@@ -66,12 +67,27 @@ def evaluate_clip_policy(
     clip_text: str,
     suggested_title: str,
     *,
-    ollama_host: Optional[str] = None,
+    nsfw_fn: Optional[Callable] = None,
+    hook_fn: Optional[Callable] = None,
+    topic_fn: Optional[Callable] = None,
 ) -> PolicyVerdict:
-    """Run the four content checks in order. Short-circuit on first content
-    failure. Infrastructure failures (NSFW/hook_sanity Ollama) abort with
-    infrastructure_failed=True; the caller fails-soft.
+    """Run the five content checks in order. Short-circuit on first content
+    failure. Infrastructure failures abort with infrastructure_failed=True.
+
+    nsfw_fn(clip_text) -> NsfwVerdict
+    hook_fn(clip_text, title)  -> HookSanityVerdict
+    topic_fn(clip_text) -> TopicVerdict
+
+    Defaults to the real Ollama-backed module functions with host=None (localhost).
+    Pass partials with host pre-baked for non-default Ollama endpoints.
     """
+    if nsfw_fn is None:
+        nsfw_fn = functools.partial(nsfw_mod.classify_nsfw, model=cfg.ollama_model)
+    if hook_fn is None:
+        hook_fn = functools.partial(hook_mod.rate_hook_sanity, model=cfg.ollama_model)
+    if topic_fn is None:
+        topic_fn = functools.partial(topic_mod.classify_topic, model=cfg.ollama_model)
+
     checks: list[CheckResult] = []
 
     # 1. banlist — concatenate clip text + title.
@@ -88,8 +104,7 @@ def evaluate_clip_policy(
     checks.append(CheckResult(name="banlist", passed=True, value="-"))
 
     # 2. profanity — clip text + title.
-    prof_text = haystack
-    over, score = profanity_mod.is_profane(prof_text, float(cfg.profanity_max_score))
+    over, score = profanity_mod.is_profane(haystack, float(cfg.profanity_max_score))
     score_str = f"{score:.1f}"
     if over:
         checks.append(CheckResult(name="profanity", passed=False, value=score_str))
@@ -101,12 +116,8 @@ def evaluate_clip_policy(
         )
     checks.append(CheckResult(name="profanity", passed=True, value=score_str))
 
-    # 3. nsfw — Ollama call. Empty-text edge already returns 'safe' upstream.
-    nsfw_verdict = nsfw_mod.classify_nsfw(
-        clip_text,
-        model=cfg.ollama_model,
-        host=ollama_host,
-    )
+    # 3. nsfw
+    nsfw_verdict = nsfw_fn(clip_text)
     if nsfw_verdict.label == "infrastructure_failed":
         return PolicyVerdict(
             passed=False,
@@ -129,17 +140,9 @@ def evaluate_clip_policy(
         name="nsfw", passed=True, value=nsfw_value, reason=nsfw_verdict.reason,
     ))
 
-    # 4. hook_sanity — Ollama call. Binary accept/reject (qwen2.5:3b can't
-    # do 1-5 ordinal scoring — empirically verified; see hook_sanity.py
-    # docstring). cfg.hook_sanity_min_score is retained in the schema for
-    # backward compat but no longer consulted; the verdict itself is the
-    # rejection signal.
-    hook_verdict = hook_mod.rate_hook_sanity(
-        clip_text,
-        suggested_title or "",
-        model=cfg.ollama_model,
-        host=ollama_host,
-    )
+    # 4. hook_sanity — binary accept/reject; cfg.hook_sanity_min_score kept for
+    # schema compat but not consulted (qwen2.5:3b can't do 1-5 ordinals).
+    hook_verdict = hook_fn(clip_text, suggested_title or "")
     if hook_verdict.infrastructure_failed:
         return PolicyVerdict(
             passed=False,
@@ -162,15 +165,8 @@ def evaluate_clip_policy(
         name="hook_sanity", passed=True, value=hook_value, reason=hook_verdict.reason,
     ))
 
-    # 5. topic_filter — Ollama call. Channel content policy: no clips
-    # primarily about religion or war (locked Phase 4.5 follow-up requirement).
-    # Binary classifier returns "allowed" | "religion" | "war"; rejects on
-    # the latter two.
-    topic_verdict = topic_mod.classify_topic(
-        clip_text,
-        model=cfg.ollama_model,
-        host=ollama_host,
-    )
+    # 5. topic_filter — no religion or war clips.
+    topic_verdict = topic_fn(clip_text)
     if topic_verdict.infrastructure_failed:
         return PolicyVerdict(
             passed=False,

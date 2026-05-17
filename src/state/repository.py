@@ -30,10 +30,11 @@ class Repository:
         self.conn = conn
 
     @contextmanager
-    def tx(self) -> Iterator[sqlite3.Connection]:
+    def tx(self) -> Iterator["Repository"]:
+        """Transaction context. Yields repo itself — callers use repo methods inside."""
         try:
             self.conn.execute("BEGIN")
-            yield self.conn
+            yield self
             self.conn.execute("COMMIT")
         except Exception:
             self.conn.execute("ROLLBACK")
@@ -529,3 +530,66 @@ class Repository:
             "UPDATE runs SET finished_at=datetime('now'), success=?, summary_json=? WHERE run_id=?",
             (1 if success else 0, summary_json, run_id),
         )
+
+    # ---- named single-clip lookup (replaces repo.conn.execute inline SQL) ----
+
+    def get_clip(self, clip_id: str) -> sqlite3.Row | None:
+        """Fetch a single clips row by clip_id. Returns None if not found."""
+        return self.conn.execute(
+            "SELECT * FROM clips WHERE clip_id=?", (clip_id,)
+        ).fetchone()
+
+    def clip_has_youtube_id(self, clip_id: str) -> bool:
+        """Return True if the clip row has a non-NULL youtube_video_id."""
+        row = self.conn.execute(
+            "SELECT youtube_video_id FROM clips WHERE clip_id=?", (clip_id,)
+        ).fetchone()
+        return row is not None and row["youtube_video_id"] is not None
+
+    def set_clip_publish_at(self, clip_id: str, publish_at_utc: str) -> None:
+        """Narrow update: write publish_at_utc without touching status."""
+        self.conn.execute(
+            "UPDATE clips SET publish_at_utc=?, updated_at=datetime('now') WHERE clip_id=?",
+            (publish_at_utc, clip_id),
+        )
+
+    # ---- quota (absorbed from QuotaLedger) ----
+
+    def quota_record(self, endpoint: str, units: int) -> None:
+        """Record quota usage for today (UTC)."""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.conn.execute(
+            "INSERT INTO quota_usage (date, endpoint, units) VALUES (?, ?, ?)",
+            (today, endpoint, int(units)),
+        )
+
+    def quota_today_total(self) -> int:
+        """Sum of all units recorded today (UTC)."""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(units), 0) AS s FROM quota_usage WHERE date=?",
+            (today,),
+        ).fetchone()
+        return int(row["s"]) if row else 0
+
+    def quota_would_exceed(self, units: int, ceiling: int) -> bool:
+        """Return True if recording `units` more would push today's total past ceiling."""
+        return (self.quota_today_total() + units) > ceiling
+
+    # ---- retention delete helpers ----
+
+    def delete_dup_hashes_before(self, cutoff_iso: str) -> int:
+        """Delete dup_hashes rows created before cutoff_iso. Returns deleted count."""
+        cur = self.conn.execute(
+            "DELETE FROM dup_hashes WHERE created_at <= ?", (cutoff_iso,)
+        )
+        return cur.rowcount
+
+    def delete_quota_usage_before(self, cutoff_date: str) -> int:
+        """Delete quota_usage rows with date <= cutoff_date (YYYY-MM-DD). Returns deleted count."""
+        cur = self.conn.execute(
+            "DELETE FROM quota_usage WHERE date <= ?", (cutoff_date,)
+        )
+        return cur.rowcount

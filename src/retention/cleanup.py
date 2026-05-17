@@ -29,6 +29,7 @@ next sweep retries.
 
 from __future__ import annotations
 
+import functools
 import os
 import sqlite3
 from dataclasses import dataclass, field
@@ -326,6 +327,7 @@ def run_all(
     """
     result = RetentionResult(dry_run=dry_run)
     logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+    alert = functools.partial(append_alert, logs_dir)
     project_root = cfg.abs_path(".")
 
     # ---- enumerate -----------------------------------------------------------
@@ -406,8 +408,8 @@ def run_all(
         f"errors={len(result.delete_errors)}"
     )
     if result.delete_errors:
-        append_alert(
-            logs_dir, kind="retention_delete_errors",
+        alert(
+            kind="retention_delete_errors",
             message=f"{len(result.delete_errors)} delete error(s); first: {result.delete_errors[0]}",
         )
     return result

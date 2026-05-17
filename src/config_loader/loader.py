@@ -1,15 +1,65 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
 
 
+# ---------------------------------------------------------------------------
+# Pivot.6 sub-models
+# ---------------------------------------------------------------------------
+
+
+class AiGenConfig(BaseModel):
+    model: str = "kwaivgi/kling-v3.0-std"
+    per_clip_cost_cents_max: int
+    daily_spend_cents_ceiling: int
+    max_concurrent: int = 2
+    shots_per_clip_min: int = 4
+    shots_per_clip_max: int = 6
+    shot_duration_s: int = 5
+    style_suffix: str = (
+        "3D animated, Pixar-shaded surface, surreal cinematic lighting, "
+        "vertical 9:16, photoreal textures with stylized characters, dark moody atmosphere"
+    )
+
+
+class ScripterConfig(BaseModel):
+    topic_pool: list[str]
+    target_word_count: int = 80
+    max_retries: int = 3
+
+
+class NarrationConfig(BaseModel):
+    voice: str = "en-US-GuyNeural"
+    rate: str = "-8%"
+    pitch: str = "-2Hz"
+
+
+class SubtitlesConfig(BaseModel):
+    position_x: int = 540
+    position_y: int = 1500
+    font_size: int = 52
+    font_name: str = "Arial"
+
+
+class ComplianceConfig(BaseModel):
+    ai_disclosure: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Core sub-models (retained from previous phases)
+# ---------------------------------------------------------------------------
+
+
 class Retention(BaseModel):
-    raw_video: int
-    transcript: int
+    # Pivot.6 TTLs
+    ai_gen_shots: int = 7
+    narration: int = 14
+    scripts: int = 90
+    # Retained
     output_post_upload: int
     rejected_clips: int
     dup_hashes: int
@@ -19,97 +69,75 @@ class Retention(BaseModel):
 
 class Paths(BaseModel):
     state_db: str
-    raw_dir: str
-    transcripts_dir: str
     pending_dir: str
     approved_dir: str
     rejected_dir: str
     dry_run_dir: str
-    orphans_dir: str = "output/orphans"   # Phase 5; default for backward compat with older config files
-    music_dir: str = "data/music"         # Pivot.3; default for backward compat with older config files
+    orphans_dir: str = "output/orphans"
     logs_dir: str
     oauth_token: str
     client_secrets: str
+    # Retained with defaults so older config.yaml files keep working
+    raw_dir: str = "data/raw"
+    transcripts_dir: str = "data/transcripts"
+    music_dir: str = "data/music"
+    # Pivot.6 dirs
+    ai_gen_shots_dir: str = "data/ai_gen_shots"
+    narration_dir: str = "data/narration"
+    scripts_dir: str = "data/scripts"
+
+
+# ---------------------------------------------------------------------------
+# Top-level Config (Pivot.6)
+# ---------------------------------------------------------------------------
 
 
 class Config(BaseModel):
+    # Cadence
     clips_per_day: int
     days_per_run: int
     upload_slots: list[str]
-
     timezone: str
 
-    keywords: list[str]
-    search_max_results_per_keyword: int
-    discovery_max_inspected_per_keyword: int = 100
-    discovery_min_interval_hours: int = 6
-    min_source_duration_seconds: int
-    recency_window_days: int
-    virality_score_threshold: float
-
+    # Models
     whisper_model: str
     whisper_compute_type: str
     whisper_device: str
     ollama_model: str
 
-    lang_detect_threshold: float = 0.7
-    lang_detect_target_lang: str = "en"
-
-    clip_min_seconds: int
-    clip_max_seconds: int
-    clips_per_video: int
-    selector_max_candidates: int = 25
-
-    # Captions (Pivot.1) — caption-first transcript path
-    caption_min_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
-    caption_prefer_manual: bool = True
-
+    # Policy gate
     human_review: bool
     banlist: list[str]
     hook_sanity_min_score: int
     profanity_max_score: int
 
-    min_speech_density: float
-    min_word_confidence: float
+    # Quality screen
+    min_speech_density: float = 1.5
+    min_word_confidence: float = 0.6
     dedup_lookback_days: int
     phash_min_hamming: int
 
-    disk_soft_cap_gb: int = 50
-    disk_hard_cap_gb: int = 100
-    free_disk_safety_floor_gb: int = 5
-    download_min_height: int = 720
-    download_max_height: int = 1080
-    download_estimated_bytes_per_video: int = 524288000
-
-    # Render (Pivot.3) — full-screen blurred-bg replaces split-screen.
-    # top_pane_height / bottom_pane_height / gameplay_pool removed; older
-    # config.yaml files with those fields will be silently ignored by pydantic
-    # (they're not declared here), letting the user edit at their pace.
+    # Assembler / render
     output_resolution: list[int]
-    render_strategy: Literal["blurred_bg", "center_crop", "letterbox"] = "blurred_bg"
-    blurred_bg_sigma: int = Field(default=20, ge=0, le=100)
-    source_pane_aspect: str = "16:9"
     nvenc_preset: str
     nvenc_cq: int
     loudness_target_lufs: float
-
-    # Audio: dialogue reverb + background music (Pivot.3)
-    dialogue_reverb_enabled: bool = True
-    dialogue_reverb_aecho: str = "0.8:0.88:60:0.4"
     music_enabled: bool = True
     music_volume_db: float = -15.0
 
-    # Copyright acknowledgement (Pivot.0) — optional string the user sets to
-    # acknowledge the elevated strike risk of the movie-clip pivot. Surfaced
-    # as a WARN in bootstrap --check; not a hard gate.
-    copyright_acknowledgement: Optional[str] = None
-
+    # Quota
     youtube_quota_daily_units: int
     youtube_quota_ceiling_units: int
     videos_insert_unit_cost: int
-    search_list_unit_cost: int
-    videos_list_unit_cost: int
 
+    # Pivot.6 sub-models
+    ai_gen: AiGenConfig
+    scripter: ScripterConfig
+    narration: NarrationConfig
+    subtitles: SubtitlesConfig = Field(default_factory=SubtitlesConfig)
+    compliance: ComplianceConfig = Field(default_factory=ComplianceConfig)
+
+    # Nested
     retention: Retention
     paths: Paths
 

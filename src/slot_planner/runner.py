@@ -20,6 +20,7 @@ Run startup (run_all + single-clip CLI both call this):
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import sqlite3
@@ -132,7 +133,7 @@ def reconcile_slot_renames(repo: Repository, cfg: Config) -> List[str]:
     pending_dir = cfg.abs_path(cfg.paths.pending_dir)
     if not pending_dir.exists():
         return []
-    logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+    alert = functools.partial(append_alert, cfg.abs_path(cfg.paths.logs_dir))
 
     fixed: List[str] = []
     for unscheduled_path in pending_dir.glob("__unscheduled__*.mp4"):
@@ -159,7 +160,7 @@ def reconcile_slot_renames(repo: Repository, cfg: Config) -> List[str]:
                 f"{clip_id}: both __unscheduled__ and {target.name} exist "
                 f"in {pending_dir}; manual inspection required"
             )
-            append_alert(logs_dir, kind="slot_rename_both_exist", message=msg)
+            alert(kind="slot_rename_both_exist", message=msg)
             logger.warning(msg)
             continue
         try:
@@ -169,7 +170,7 @@ def reconcile_slot_renames(repo: Repository, cfg: Config) -> List[str]:
             logger.info(f"reconcile_slot_renames: {clip_id} -> {target.name}")
         except OSError as exc:
             msg = f"{clip_id}: rename {unscheduled_path.name} -> {target.name} failed: {exc}"
-            append_alert(logs_dir, kind="slot_rename_failed", message=msg)
+            alert(kind="slot_rename_failed", message=msg)
             logger.error(msg)
     return fixed
 
@@ -376,18 +377,18 @@ def run_all(
         batch.overflow.extend(overflow)
 
     if not dry_run:
-        logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+        alert = functools.partial(append_alert, cfg.abs_path(cfg.paths.logs_dir))
         if batch.overflow:
-            append_alert(
-                logs_dir, kind="slot_overflow",
+            alert(
+                kind="slot_overflow",
                 message=(
                     f"{len(batch.overflow)} clip(s) had no slot this run; "
                     f"first: {batch.overflow[:5]}"
                 ),
             )
         if batch.rename_failed:
-            append_alert(
-                logs_dir, kind="slot_rename_failed_batch",
+            alert(
+                kind="slot_rename_failed_batch",
                 message=(
                     f"{len(batch.rename_failed)} clip(s) had DB committed but "
                     f"rename failed; reconcile_slot_renames will heal next run; "
@@ -395,16 +396,16 @@ def run_all(
                 ),
             )
         if batch.both_paths_exist:
-            append_alert(
-                logs_dir, kind="slot_rename_both_exist",
+            alert(
+                kind="slot_rename_both_exist",
                 message=(
                     f"{len(batch.both_paths_exist)} clip(s) had both old + new paths "
                     f"present; manual inspection required: {batch.both_paths_exist[:5]}"
                 ),
             )
         if batch.no_output:
-            append_alert(
-                logs_dir, kind="slot_no_output",
+            alert(
+                kind="slot_no_output",
                 message=(
                     f"{len(batch.no_output)} clip(s) lacked source file; "
                     f"first: {batch.no_output[:5]}"

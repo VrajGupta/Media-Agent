@@ -17,6 +17,7 @@ Failure handling:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import sqlite3
@@ -308,26 +309,26 @@ def run_all(
             alerts.move_failed.append(result.clip_id)
 
     if not dry_run:
-        logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+        alert = functools.partial(append_alert, cfg.abs_path(cfg.paths.logs_dir))
         if alerts.no_output:
-            append_alert(logs_dir, kind="quality_no_output",
-                         message=f"{len(alerts.no_output)} clips lacked rendered file: {alerts.no_output[:5]}")
+            alert(kind="quality_no_output",
+                  message=f"{len(alerts.no_output)} clips lacked rendered file: {alerts.no_output[:5]}")
         if alerts.no_transcript:
-            append_alert(logs_dir, kind="quality_no_transcript",
-                         message=f"{len(alerts.no_transcript)} clips lacked transcript: {alerts.no_transcript[:5]}")
+            alert(kind="quality_no_transcript",
+                  message=f"{len(alerts.no_transcript)} clips lacked transcript: {alerts.no_transcript[:5]}")
         if alerts.probe_failed:
-            append_alert(logs_dir, kind="quality_probe_failed",
-                         message=f"{len(alerts.probe_failed)} clips failed ffprobe: {alerts.probe_failed[:5]}")
+            alert(kind="quality_probe_failed",
+                  message=f"{len(alerts.probe_failed)} clips failed ffprobe: {alerts.probe_failed[:5]}")
         if alerts.loudness_warn:
-            append_alert(logs_dir, kind="loudness_warn",
-                         message=(
-                             f"{len(alerts.loudness_warn)} clips passed loudness in warn band "
-                             f"(0.5-1.5 LUFS off target); escalate to two-pass loudnorm "
-                             f"if this band fills up: {alerts.loudness_warn[:5]}"
-                         ))
+            alert(kind="loudness_warn",
+                  message=(
+                      f"{len(alerts.loudness_warn)} clips passed loudness in warn band "
+                      f"(0.5-1.5 LUFS off target); escalate to two-pass loudnorm "
+                      f"if this band fills up: {alerts.loudness_warn[:5]}"
+                  ))
         if alerts.move_failed:
-            append_alert(logs_dir, kind="quality_rejected_move_failed",
-                         message=f"{len(alerts.move_failed)} rejected_quality clips could not be moved to output/rejected/: {alerts.move_failed[:5]}")
+            alert(kind="quality_rejected_move_failed",
+                  message=f"{len(alerts.move_failed)} rejected_quality clips could not be moved to output/rejected/: {alerts.move_failed[:5]}")
 
     summary = {o.value: 0 for o in QualityOutcome}
     for r in results:

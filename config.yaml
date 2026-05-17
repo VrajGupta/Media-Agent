@@ -1,4 +1,4 @@
-# Media Agent — Runtime Configuration
+# Media Agent — Runtime Configuration (Pivot.6)
 
 # --- Cadence ---
 clips_per_day: 4
@@ -8,108 +8,84 @@ upload_slots: ["09:00", "13:00", "17:00", "21:00"]   # canonical timezone (below
 # --- Time ---
 timezone: "Asia/Singapore"
 
-# --- Discovery ---
-# Content pivot 2026-05-04: movie-clip reupload format. Old keywords archived in
-# CLAUDE.md history. Niche baseline resets on first weekly run (cold start safe).
-keywords:
-  - "famous movie clips"
-  - "new trending movie clips"
-search_max_results_per_keyword: 50                    # maxResults per search.list page (API caps at 50)
-discovery_max_inspected_per_keyword: 200              # total UNIQUE IDs to fetch via pagination
-discovery_min_interval_hours: 6                       # cooldown for the idempotency guard
-min_source_duration_seconds: 300                      # 5 minutes
-recency_window_days: 30
-virality_score_threshold: 1.0
-
 # --- Models ---
-whisper_model: "large-v3"                             # falls back to medium.en if VRAM tight
+whisper_model: "large-v3"                             # forced-alignment role only (post-Pivot.6)
 whisper_compute_type: "int8_float16"                  # CTranslate2 setting
 whisper_device: "cuda"
-ollama_model: "qwen2.5:3b-instruct"
+ollama_model: "qwen2.5:3b-instruct"                   # policy_gate + scripter
 
-# --- Language detection (Phase 2.5) ---
-lang_detect_threshold: 0.7                            # reject iff lang!=target AND confidence>=this
-lang_detect_target_lang: "en"
-
-# --- Selection ---
-clip_min_seconds: 30
-clip_max_seconds: 60
-clips_per_video: 2
-selector_max_candidates: 25                            # cap windows passed to Ollama; long videos can produce 200+ baseline windows which overwhelm qwen2.5:3b
-
-# --- Captions (Pivot.1 — caption-first transcript path) ---
-caption_min_confidence: 0.7                            # auto-caption mean placeholder confidence below this triggers Whisper fallback
-caption_prefer_manual: true                            # try manual track first; fall back to auto, then Whisper
-
-# --- Policy ---
+# --- Policy gate ---
 human_review: true                                    # locked true for first 2 weeks
 banlist:
   - "suicide"
   - "self-harm"
   - "racial slur"
-hook_sanity_min_score: 3                              # INFORMATIONAL ONLY post-Phase-4.5.
-                                                       # qwen2.5:3b can't do reliable 1-5 ordinals,
-                                                       # so the gate was changed to binary
-                                                       # accept/reject in src/policy_gate/hook_sanity.py.
-                                                       # This value is no longer read by the runtime.
-profanity_max_score: 5                                # better-profanity scale; tune empirically
+hook_sanity_min_score: 3                              # schema-compat only; gate uses binary accept/reject
+profanity_max_score: 5
 
-# --- Quality ---
-min_speech_density: 1.5                               # words per second
-min_word_confidence: 0.6
+# --- Quality screen ---
+min_speech_density: 1.5                               # words/s — skipped for TTS audio; kept for schema compat
+min_word_confidence: 0.6                              # skipped for TTS audio; kept for schema compat
 dedup_lookback_days: 90
 phash_min_hamming: 8
 
-# --- Downloader ---
-disk_soft_cap_gb: 50                                  # eviction loop runs above this (no-op until clips upload in Phase 5)
-disk_hard_cap_gb: 100                                 # downloader refuses to run above this
-free_disk_safety_floor_gb: 5                          # halt if filesystem free space below this
-download_min_height: 720                              # reject anything below
-download_max_height: 1080                             # ceiling; yt-dlp picks 1080 when available
-download_estimated_bytes_per_video: 524288000         # 500 MB; fallback when probe lacks filesize
-
-# --- Render (Pivot.3 — full-screen blurred-bg, replaces split-screen) ---
-output_resolution: [1080, 1920]
-render_strategy: "blurred_bg"                          # blurred_bg | center_crop | letterbox
-blurred_bg_sigma: 20                                   # gblur sigma when render_strategy=blurred_bg
-source_pane_aspect: "16:9"                             # for blurred_bg overlay sizing (1080:608 fg pane)
+# --- Assembler / render ---
+output_resolution: [1080, 1920]                       # native 9:16 from Kling — no blurred-bg needed
 nvenc_preset: "p5"
 nvenc_cq: 23
 loudness_target_lufs: -14.0
-
-# --- Audio: dialogue reverb + background music ---
-# Reverb on dialogue gives a cinematic "trailer" feel. aecho params are
-# in_gain:out_gain:delays_ms:decays. The default below is a moderate single
-# delay; tune up to "0.8:0.9:80:0.5" for a deeper hall.
-dialogue_reverb_enabled: true
-dialogue_reverb_aecho: "0.8:0.88:60:0.4"
-
-# Background music: drop royalty-free tracks (phonk, lo-fi, anything trendy)
-# into data/music/ as mp3/m4a/wav/flac/ogg. Editor picks one deterministically
-# per clip via sha1(clip_id) modulo. Loops if the track is shorter than the
-# clip; trims if longer.
-#
-# music_volume_db is a flat gain reduction relative to the source music level.
-# YouTube Audio Library tracks ship at ~-14 LUFS; -15 dB drops them to ~-29 LUFS,
-# leaving the -14-LUFS dialogue clearly on top. Tune toward -10 if you want
-# music more present, toward -18 for ambient bed.
 music_enabled: true
 music_volume_db: -15
 
-# --- Copyright (movie clips have higher strike risk than podcasts) ---
-copyright_acknowledgement: "movie_clips_v1"            # explicit ack of pivot risk; bootstrap --check warns if absent
-
-# --- Quota ---
+# --- YouTube quota ---
 youtube_quota_daily_units: 10000
 youtube_quota_ceiling_units: 9000                     # uploader aborts before crossing this
 videos_insert_unit_cost: 1600
-search_list_unit_cost: 100
-videos_list_unit_cost: 1
+
+# --- AI generation (Kling via OpenRouter) ---
+ai_gen:
+  model: "kwaivgi/kling-v3.0-std"
+  per_clip_cost_cents_max: 150                        # ~$1.50/clip ceiling; abort if projection exceeds
+  daily_spend_cents_ceiling: 2000                     # ~$20/day ceiling
+  max_concurrent: 2                                   # Kling rate-limit safe
+  shots_per_clip_min: 4
+  shots_per_clip_max: 6
+  shot_duration_s: 5
+  style_suffix: "3D animated, Pixar-shaded surface, surreal cinematic lighting, vertical 9:16, photoreal textures with stylized characters, dark moody atmosphere"
+
+# --- Scripter (Ollama topic-seed → JSON script) ---
+scripter:
+  topic_pool:
+    - "weird_biology"
+    - "deep_sea"
+    - "weird_history"
+    - "unsettling_animal_facts"
+    - "rare_natural_phenomena"
+  target_word_count: 80                               # ~30 s at 2.7 wps
+  max_retries: 3
+
+# --- Narration (Edge TTS) ---
+narration:
+  voice: "en-US-GuyNeural"
+  rate: "-8%"
+  pitch: "-2Hz"
+
+# --- Subtitles (ASS burn — line-at-a-time, centered) ---
+subtitles:
+  position_x: 540
+  position_y: 1500
+  font_size: 52
+  font_name: "Arial"
+
+# --- Compliance ---
+compliance:
+  ai_disclosure: true                                 # YouTube altered/synthetic content attestation
 
 # --- Retention (days) ---
 retention:
-  raw_video: 14
-  transcript: 90
+  ai_gen_shots: 7                                     # Pivot.6: delete raw shots after render
+  narration: 14                                       # Pivot.6: keep TTS mp3 + word timings 14 d
+  scripts: 90                                         # Pivot.6: keep Ollama scripts 90 d
   output_post_upload: 7
   rejected_clips: 30
   dup_hashes: 90
@@ -119,14 +95,14 @@ retention:
 # --- Paths (rarely changed) ---
 paths:
   state_db: "data/state.db"
-  raw_dir: "data/raw"
-  transcripts_dir: "data/transcripts"
   pending_dir: "output/pending"
   approved_dir: "output/approved"
   rejected_dir: "output/rejected"
   dry_run_dir: "output/dry_run"
-  orphans_dir: "output/orphans"                       # Phase 5 orphan-marker fence; cleaned up on happy path
-  music_dir: "data/music"                             # Pivot.3 — drop trendy tracks here (mp3/m4a/wav/flac/ogg)
+  orphans_dir: "output/orphans"
   logs_dir: "logs"
   oauth_token: "data/oauth_token.json"
   client_secrets: "data/client_secret.json"
+  ai_gen_shots_dir: "data/ai_gen_shots"
+  narration_dir: "data/narration"
+  scripts_dir: "data/scripts"

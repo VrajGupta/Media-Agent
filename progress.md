@@ -778,12 +778,14 @@ Zero banlist or profanity triggers.
 - [ ] **Acceptance:** docs cold-start readable; test channel empty; no clips in `clips_for_upload()` queue
 
 ### Pivot.6.1 — Provider Adapter Skeleton + Kling Spike
-- [ ] `src/ai_gen/base.py` — `Provider` ABC: `submit`, `poll`, `download`, `last_cost_cents`
-- [ ] `src/ai_gen/kling.py` — Kling concrete impl; tenacity retry; API key from `KLING_API_KEY`
-- [ ] `src/ai_gen/runner.py` — submit/poll concurrently (asyncio max 2), persist `generation_jobs`, cost to `quota_usage(provider='kling')`
-- [ ] **Spike:** 10 hand-written prompts → eyeball vs Zack D. Films reference → provider swap decision logged
-- [ ] `tests/ai_gen/` — ≥10 unit tests (submit, poll, download, cost recording, concurrent limit)
-- [ ] **Acceptance:** 10 sample shots downloaded; average cost within `per_clip_cost_cents_max / shots_per_clip_max`; user signs off on aesthetic
+- [x] `src/ai_gen/base.py` — `Provider` ABC: `submit`, `poll`, `download`, `wait_for_completion` (2026-05-16)
+- [x] `src/ai_gen/kling.py` — KlingClient: JWT HS256 auth (30-min cache/refresh), submit/poll/download, tenacity retry on ConnectionError/Timeout (2026-05-16)
+- [x] `src/ai_gen/runner.py` — `generate_shots()` with threading.Semaphore concurrency, concurrent wait+download, raises RuntimeError on any failure (2026-05-16)
+- [x] `tests/ai_gen/` — 19 unit tests (15 KlingClient + 4 runner); 476 total green (2026-05-16)
+- [x] `requirements.txt` — added `PyJWT>=2.8.0` (2026-05-16)
+- [x] `.env` / `.env.example` — Kling API keys wired (2026-05-16)
+- [ ] **Spike:** live API verification blocked — error 1003 "Authorization is not active". API key/account needs activation in Kling developer portal before spike can run.
+- [ ] **Acceptance:** 10 sample shots downloaded; average cost within budget; user signs off on aesthetic
 
 ### Pivot.6.2 — Script / Scene Builder
 - [ ] `src/scripter/runner.py` — topic seed → Ollama JSON-mode → pydantic-validated `{title, narration, shots[], style_notes}`
@@ -821,6 +823,20 @@ Zero banlist or profanity triggers.
 - [ ] `quota_ledger/ledger.py` — `provider` dimension through `record()` / `check_or_raise()`; daily Kling spend ceiling
 - [ ] `pytest tests/policy_gate tests/quality_screen tests/uploader` green
 - [ ] **Acceptance:** dry-run JSON shows correct AI-gen description + disclosure flag
+
+### Pivot.6 Architecture Deepening (TDD, 2026-05-17)
+
+> Seven architectural friction points grilled and resolved (P1–P7). Each implemented with red-green TDD vertical slices.
+
+- [x] **P1 — Repository shallow pass-through**: `tx()` yields `repo` not `conn`; `get_clip()`, `clip_has_youtube_id()`, `set_clip_publish_at()`, `delete_dup_hashes_before()`, `delete_quota_usage_before()` added; quota methods absorbed from `QuotaLedger` into `Repository`. 16 new tests in `tests/test_repository_p1.py`.
+- [x] **P2 — AI gen Provider seam** (already solved pre-grilling): `generate_shots()` already accepts `client: Provider`; `FakeProvider` / `MagicMock` used in tests; no refactoring needed.
+- [x] **P3 — policy_gate Ollama host passthrough eliminated**: `evaluate_clip_policy()` now accepts injectable `nsfw_fn`, `hook_fn`, `topic_fn` callables; `ollama_host` parameter removed; `run_all()` builds partials once at top. 7 new tests in `tests/test_policy_evaluator_injection.py`.
+- [x] **P4 — Config god object**: Added `AiGenConfig`, `ScripterConfig`, `NarrationConfig`, `SubtitlesConfig`, `ComplianceConfig` as nested Pydantic sub-models on `Config`; removed dead legacy fields (discovery, lang_detect, selector, downloader, render, dialogue_reverb, copyright); `Retention` gains `ai_gen_shots`, `narration`, `scripts` TTLs; `Paths` gains `ai_gen_shots_dir`, `narration_dir`, `scripts_dir`; `config.yaml` rewritten for Pivot.6. 43 new tests in `tests/test_config_p4.py`.
+- [x] **P5 — slot_planner allocator** (already solved pre-grilling): `allocate_slots()` in `allocator.py` already pure; per-clip DB + filesystem remain in `runner.py`; no refactoring needed.
+- [x] **P6 — gen_run.py stage dependencies**: decided `gen_run.py` calls stages directly with `run_all(repo, cfg)` — no `StageContext` abstraction until a second pipeline needs it.
+- [x] **P7 — observability partial binding**: `functools.partial(append_alert, logs_dir)` bound once at top of `run_all()` / entry point in `quality_screen`, `slot_planner`, `uploader`, `retention` runners. `policy_gate` was already updated.
+- [x] **OpenRouter Kling 3.0**: `src/ai_gen/openrouter_kling.py` — new `OpenRouterKlingClient(Provider)` adapter for `kwaivgi/kling-v3.0-std` via `POST https://openrouter.ai/api/v1/videos`; Bearer auth via `OPENROUTER_API_KEY` env var (never hardcoded); 23 unit tests in `tests/ai_gen/test_openrouter_kling.py`. `.env.example` updated.
+- [x] **Test count after all changes:** 108 passing (tests across P1 + P3 + P4 + ai_gen suites).
 
 ### Pivot.6.6 — Dry-Run to Scheduled Upload
 - [ ] `gen_run.py` — full orchestrator: loop `clips_per_day × days_per_run`; run lock + `runs.md`; `--dry-run` and `--clips N` flags

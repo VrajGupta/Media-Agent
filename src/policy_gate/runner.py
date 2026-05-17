@@ -14,7 +14,9 @@ Failure handling:
 
 from __future__ import annotations
 
+import functools
 import json
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from enum import Enum
@@ -25,6 +27,9 @@ from loguru import logger
 
 from src.config_loader import Config
 from src.observability import append_alert
+from src.policy_gate import hook_sanity as hook_mod
+from src.policy_gate import nsfw as nsfw_mod
+from src.policy_gate import topic_filter as topic_mod
 from src.policy_gate.evaluator import PolicyVerdict, evaluate_clip_policy
 from src.state import Repository
 from src.transcripts.clip_text import clip_text_from_words, words_in_clip_window
@@ -93,7 +98,9 @@ def gate_one_clip(
     clip_id: str,
     force: bool = False,
     dry_run: bool = False,
-    ollama_host: Optional[str] = None,
+    nsfw_fn=None,
+    hook_fn=None,
+    topic_fn=None,
 ) -> PolicyResult:
     row = repo.conn.execute("SELECT * FROM clips WHERE clip_id=?", (clip_id,)).fetchone()
     if row is None:
@@ -122,7 +129,9 @@ def gate_one_clip(
         cfg,
         clip_text,
         row["suggested_title"] or "",
-        ollama_host=ollama_host,
+        nsfw_fn=nsfw_fn,
+        hook_fn=hook_fn,
+        topic_fn=topic_fn,
     )
 
     if verdict.infrastructure_failed:
@@ -163,8 +172,12 @@ def run_all(
     *,
     force: bool = False,
     dry_run: bool = False,
-    ollama_host: Optional[str] = None,
 ) -> list[PolicyResult]:
+    ollama_host = os.environ.get("OLLAMA_HOST")
+    nsfw_fn = functools.partial(nsfw_mod.classify_nsfw, model=cfg.ollama_model, host=ollama_host)
+    hook_fn = functools.partial(hook_mod.rate_hook_sanity, model=cfg.ollama_model, host=ollama_host)
+    topic_fn = functools.partial(topic_mod.classify_topic, model=cfg.ollama_model, host=ollama_host)
+
     if force:
         rows = repo.conn.execute(
             "SELECT clip_id FROM clips "
@@ -178,13 +191,15 @@ def run_all(
         logger.info("policy_gate: no candidates")
         return []
 
+    alert = functools.partial(append_alert, cfg.abs_path(cfg.paths.logs_dir))
     alerts = _BatchAlerts()
     results: list[PolicyResult] = []
 
     for row in rows:
         result = gate_one_clip(
             repo=repo, cfg=cfg, clip_id=row["clip_id"],
-            force=force, dry_run=dry_run, ollama_host=ollama_host,
+            force=force, dry_run=dry_run,
+            nsfw_fn=nsfw_fn, hook_fn=hook_fn, topic_fn=topic_fn,
         )
         results.append(result)
         if result.outcome == PolicyOutcome.error_no_transcript:
@@ -194,8 +209,7 @@ def run_all(
 
     if not dry_run:
         if alerts.no_transcript:
-            append_alert(
-                cfg.abs_path(cfg.paths.logs_dir),
+            alert(
                 kind="policy_no_transcript",
                 message=(
                     f"{len(alerts.no_transcript)} clips lacked a transcript: "
@@ -203,8 +217,7 @@ def run_all(
                 ),
             )
         if alerts.infra_failures:
-            append_alert(
-                cfg.abs_path(cfg.paths.logs_dir),
+            alert(
                 kind="policy_ollama_unreachable",
                 message=(
                     f"{len(alerts.infra_failures)} clips left at 'selected' "

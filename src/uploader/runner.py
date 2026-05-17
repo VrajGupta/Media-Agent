@@ -25,6 +25,7 @@ Runner startup (run_all + single-clip CLI both call this):
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import socket
@@ -501,31 +502,31 @@ def run_all(
             break
 
     if not dry_run:
-        logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+        alert = functools.partial(append_alert, cfg.abs_path(cfg.paths.logs_dir))
         if batch.no_transcript:
-            append_alert(logs_dir, kind="upload_no_transcript",
-                         message=f"{len(batch.no_transcript)} clips lacked transcript: {batch.no_transcript[:5]}")
+            alert(kind="upload_no_transcript",
+                  message=f"{len(batch.no_transcript)} clips lacked transcript: {batch.no_transcript[:5]}")
         if batch.no_output:
-            append_alert(logs_dir, kind="upload_no_output",
-                         message=f"{len(batch.no_output)} clips lacked rendered file: {batch.no_output[:5]}")
+            alert(kind="upload_no_output",
+                  message=f"{len(batch.no_output)} clips lacked rendered file: {batch.no_output[:5]}")
         if batch.infra_failures:
-            append_alert(logs_dir, kind="upload_policy_infra_fail",
-                         message=f"{len(batch.infra_failures)} clips left at quality_pass after Ollama re-check failure; first: {batch.infra_failures[0]}")
+            alert(kind="upload_policy_infra_fail",
+                  message=f"{len(batch.infra_failures)} clips left at quality_pass after Ollama re-check failure; first: {batch.infra_failures[0]}")
         if batch.api_rejected:
-            append_alert(logs_dir, kind="upload_api_rejected",
-                         message=f"{len(batch.api_rejected)} clips rejected by YouTube; first: {batch.api_rejected[0]}")
+            alert(kind="upload_api_rejected",
+                  message=f"{len(batch.api_rejected)} clips rejected by YouTube; first: {batch.api_rejected[0]}")
         if batch.api_unreachable:
-            append_alert(logs_dir, kind="upload_api_unreachable",
-                         message=f"{len(batch.api_unreachable)} clips failed to reach YouTube; first: {batch.api_unreachable[0]}")
+            alert(kind="upload_api_unreachable",
+                  message=f"{len(batch.api_unreachable)} clips failed to reach YouTube; first: {batch.api_unreachable[0]}")
         if batch.quota_exceeded:
-            append_alert(logs_dir, kind="upload_quota_exceeded",
-                         message=f"{len(batch.quota_exceeded)} clips skipped after quota cap reached: {batch.quota_exceeded[:5]}")
+            alert(kind="upload_quota_exceeded",
+                  message=f"{len(batch.quota_exceeded)} clips skipped after quota cap reached: {batch.quota_exceeded[:5]}")
         if batch.publish_at_padded:
-            append_alert(logs_dir, kind="publish_at_padded",
-                         message=f"{len(batch.publish_at_padded)} clips had publishAt padded to now+20m: {batch.publish_at_padded[:5]}")
+            alert(kind="publish_at_padded",
+                  message=f"{len(batch.publish_at_padded)} clips had publishAt padded to now+20m: {batch.publish_at_padded[:5]}")
         if batch.persist_failed:
-            append_alert(logs_dir, kind="upload_persist_failed",
-                         message=f"{len(batch.persist_failed)} clips uploaded but DB persist failed; first: {batch.persist_failed[0]}")
+            alert(kind="upload_persist_failed",
+                  message=f"{len(batch.persist_failed)} clips uploaded but DB persist failed; first: {batch.persist_failed[0]}")
 
     summary = {o.value: 0 for o in UploadOutcome}
     for r in results:
