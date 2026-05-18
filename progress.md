@@ -758,91 +758,119 @@ Zero banlist or profanity triggers.
 
 ---
 
-## Pivot.6 — AI-Generated "Unsettling Facts" Shorts (current, started 2026-05-16)
+## Pivot.6 — Tech/AI News Shorts (current, niche corrected 2026-05-17)
 
-**Direction:** Replace all source-video ingestion with AI-generated content (Zack D. Films–style "weird/unsettling facts"). Canonical plan: `.claude/plans/you-re-picking-up-the-expressive-abelson.md`.
-**Reason:** Movie-clip format (Pivot.0–5) carried too-high copyright-strike risk. AI generation differentiates the channel and eliminates Content ID exposure.
-**Stack additions:** Kling AI (provider-abstracted), Edge TTS (`edge-tts`), Ollama repurposed as script writer.
+**Direction:** AI-generated Tech/AI news Shorts. MKBHD-style topic angle, Zack D. Films delivery format. Topics sourced from live RSS feeds (last 48 h, dedup by URL + title-similarity). ~16 s clips, ~40-word narration, 4 stitched ~4 s Kling shots, hook in first 5 words. See `plan.md` for the full slice breakdown.
+
+**Niche correction note (2026-05-17):** Pivot.6 was opened on 2026-05-16 as "weird/unsettling facts." After strategy interview on 2026-05-17, niche corrected to Tech/AI news (MKBHD-style topics, Zack D. delivery). Original `topic_pool` config retired in favor of RSS ingest. Style suffix rewritten for clean editorial aesthetic. Narration tuned to `+10%/0Hz` (natural conversational). Provider locked to OpenRouter Kling 3.0 std (`kwaivgi/kling-v3.0-std`) — direct Kling API abandoned (error 1003 activation blocker), Seedance worktree spike abandoned.
+
+**Stack additions:** OpenRouter Kling 3.0 std (provider-abstracted), Edge TTS (`edge-tts`), Ollama repurposed as script writer, `feedparser` for RSS.
 **Modules retired:** `discovery/`, `downloader/`, `lang_detect/`, `selector/`, `weekly_run.py`.
-**Modules added:** `scripter/`, `ai_gen/`, `narration/`, `assembler/` (replaces `editor/`), `gen_run.py`.
+**Modules added:** `topic_ingest/`, `scripter/`, `ai_gen/`, `narration/`, `assembler/` (replaces `editor/`), `gen_run.py`.
 **Modules updated (input contract / schema):** `state/`, `uploader/` (templating), `policy_gate/` (input), `quality_screen/` (skip density/confidence), `quota_ledger/` (provider dimension), `subtitles/` (line-at-a-time), `retention/` (new TTLs), `bootstrap.py`.
 
-### Pivot.6.0 — Reality Sync (doc-only, no code risk)
-- [x] Rewrite `CLAUDE.md` for Pivot.6 direction (2026-05-16)
-- [x] Rewrite `agents.md` with module retire/keep/new/change status (2026-05-16)
-- [x] Open Pivot.6 section in `progress.md` (2026-05-16)
-- [ ] Supersede `plan.md`; archive old contents to `plan.archive.md`
-- [ ] Update `skills.md` (add Kling AI, Edge TTS; mark yt-dlp as legacy)
-- [ ] Cancel 2 queued movie-clip uploads (clear `publish_at_utc`, set status `cancelled`)
-- [ ] Delete 5 live movie-clip Shorts from test channel (manual, YouTube Studio)
-- [ ] **Acceptance:** docs cold-start readable; test channel empty; no clips in `clips_for_upload()` queue
+### Already shipped (preserved from pre-correction work)
 
-### Pivot.6.1 — Provider Adapter Skeleton + Kling Spike
-- [x] `src/ai_gen/base.py` — `Provider` ABC: `submit`, `poll`, `download`, `wait_for_completion` (2026-05-16)
-- [x] `src/ai_gen/kling.py` — KlingClient: JWT HS256 auth (30-min cache/refresh), submit/poll/download, tenacity retry on ConnectionError/Timeout (2026-05-16)
-- [x] `src/ai_gen/runner.py` — `generate_shots()` with threading.Semaphore concurrency, concurrent wait+download, raises RuntimeError on any failure (2026-05-16)
-- [x] `tests/ai_gen/` — 19 unit tests (15 KlingClient + 4 runner); 476 total green (2026-05-16)
-- [x] `requirements.txt` — added `PyJWT>=2.8.0` (2026-05-16)
-- [x] `.env` / `.env.example` — Kling API keys wired (2026-05-16)
-- [ ] **Spike:** live API verification blocked — error 1003 "Authorization is not active". API key/account needs activation in Kling developer portal before spike can run.
-- [ ] **Acceptance:** 10 sample shots downloaded; average cost within budget; user signs off on aesthetic
-
-### Pivot.6.2 — Script / Scene Builder
-- [ ] `src/scripter/runner.py` — topic seed → Ollama JSON-mode → pydantic-validated `{title, narration, shots[], style_notes}`
-- [ ] Rubric: hook in first 8 words, ~75 words narration, 4–6 shots ≤10 s, no phobias/graphic medical/self-harm
-- [ ] Persist to `scripts` table; stub `clips` row (`content_kind='ai_generated'`)
-- [ ] Policy gate runs on `script.narration` + `script.title`; retry up to `retry_on_policy_reject`
-- [ ] `tests/scripter/` — ≥10 unit tests
-- [ ] **Acceptance:** 20 sample scripts pass eyeball QA; policy rejection ≤30%
-
-### Pivot.6.3 — Schema Bridge
-- [ ] `ALTER TABLE clips ADD COLUMN content_kind TEXT NOT NULL DEFAULT 'sourced'`
-- [ ] `ALTER TABLE clips ADD COLUMN script_id TEXT` (nullable FK → scripts)
-- [ ] Relax `clips.video_id` to nullable
-- [ ] `CREATE TABLE scripts (...)` (see plan for full DDL)
-- [ ] `CREATE TABLE generation_jobs (...)` (see plan for full DDL)
-- [ ] `ALTER TABLE quota_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'youtube'`
-- [ ] New `repository.py` helpers: `insert_script`, `insert_generation_job`, `update_job_status`, `clips_for_generation_run`, `get_clip_with_script`
-- [ ] `pytest tests/state/` green post-migration
-- [ ] `daily_upload.py --dry-run` on existing `quality_pass` clip still produces correct body (regression test)
-- [ ] **Acceptance:** migration applied to DB copy; tests green; uploader dry-run unchanged for `sourced` clips
-
-### Pivot.6.4 — Render / Subtitle Integration
-- [ ] `src/narration/runner.py` — Edge TTS → mp3; Whisper forced-align → word timings dict
-- [ ] `src/subtitles/ass_writer.py` — replace karaoke with line-at-a-time (≤28 chars/line, `\pos(540,1500)`, fade-in 100 ms); archive old writer to `_karaoke_legacy.py`
-- [ ] `src/assembler/runner.py` — concat shots → mux narration → music-bed duck → ASS burn → NVENC 1080×1920 → 2-pass −14 LUFS; reuse `editor/music.py`, `editor/ffmpeg_runner.py`, `editor/slug.py`
-- [ ] Delete blurred-bg filtergraph path from `editor/` (or rename entire dir to `assembler/`)
-- [ ] `tests/narration/`, `tests/assembler/` — unit tests
-- [ ] **Acceptance:** one clip rendered end-to-end from hand-written script; user visual QA
-
-### Pivot.6.5 — Gate / Quality Refit + Compliance
-- [ ] `policy_gate/runner.py` — accept `(clip_text=narration, recheck_title=script.title)`; tune `topic_filter` for new pool
-- [ ] `quality_screen/` — skip `density.py` and `confidence.py` for `ai_generated` clips
-- [ ] `uploader/templater.py` — branch on `content_kind`: AI-gen description drops Source/channel attribution; adds `Generated with {provider}` + disclosure footer
-- [ ] `uploader/insert_body.py` — research + set `altered_content` flag; manual Studio fallback if API field not exposed
-- [ ] `quota_ledger/ledger.py` — `provider` dimension through `record()` / `check_or_raise()`; daily Kling spend ceiling
-- [ ] `pytest tests/policy_gate tests/quality_screen tests/uploader` green
-- [ ] **Acceptance:** dry-run JSON shows correct AI-gen description + disclosure flag
-
-### Pivot.6 Architecture Deepening (TDD, 2026-05-17)
-
-> Seven architectural friction points grilled and resolved (P1–P7). Each implemented with red-green TDD vertical slices.
-
+**Architecture Deepening (TDD, 2026-05-17)** — Seven architectural friction points grilled and resolved (P1–P7). Each implemented red-green:
 - [x] **P1 — Repository shallow pass-through**: `tx()` yields `repo` not `conn`; `get_clip()`, `clip_has_youtube_id()`, `set_clip_publish_at()`, `delete_dup_hashes_before()`, `delete_quota_usage_before()` added; quota methods absorbed from `QuotaLedger` into `Repository`. 16 new tests in `tests/test_repository_p1.py`.
 - [x] **P2 — AI gen Provider seam** (already solved pre-grilling): `generate_shots()` already accepts `client: Provider`; `FakeProvider` / `MagicMock` used in tests; no refactoring needed.
 - [x] **P3 — policy_gate Ollama host passthrough eliminated**: `evaluate_clip_policy()` now accepts injectable `nsfw_fn`, `hook_fn`, `topic_fn` callables; `ollama_host` parameter removed; `run_all()` builds partials once at top. 7 new tests in `tests/test_policy_evaluator_injection.py`.
 - [x] **P4 — Config god object**: Added `AiGenConfig`, `ScripterConfig`, `NarrationConfig`, `SubtitlesConfig`, `ComplianceConfig` as nested Pydantic sub-models on `Config`; removed dead legacy fields (discovery, lang_detect, selector, downloader, render, dialogue_reverb, copyright); `Retention` gains `ai_gen_shots`, `narration`, `scripts` TTLs; `Paths` gains `ai_gen_shots_dir`, `narration_dir`, `scripts_dir`; `config.yaml` rewritten for Pivot.6. 43 new tests in `tests/test_config_p4.py`.
 - [x] **P5 — slot_planner allocator** (already solved pre-grilling): `allocate_slots()` in `allocator.py` already pure; per-clip DB + filesystem remain in `runner.py`; no refactoring needed.
 - [x] **P6 — gen_run.py stage dependencies**: decided `gen_run.py` calls stages directly with `run_all(repo, cfg)` — no `StageContext` abstraction until a second pipeline needs it.
-- [x] **P7 — observability partial binding**: `functools.partial(append_alert, logs_dir)` bound once at top of `run_all()` / entry point in `quality_screen`, `slot_planner`, `uploader`, `retention` runners. `policy_gate` was already updated.
-- [x] **OpenRouter Kling 3.0**: `src/ai_gen/openrouter_kling.py` — new `OpenRouterKlingClient(Provider)` adapter for `kwaivgi/kling-v3.0-std` via `POST https://openrouter.ai/api/v1/videos`; Bearer auth via `OPENROUTER_API_KEY` env var (never hardcoded); 23 unit tests in `tests/ai_gen/test_openrouter_kling.py`. `.env.example` updated.
-- [x] **Test count after all changes:** 108 passing (tests across P1 + P3 + P4 + ai_gen suites).
+- [x] **P7 — observability partial binding**: `functools.partial(append_alert, logs_dir)` bound once at top of `run_all()` / entry point in `quality_screen`, `slot_planner`, `uploader`, `retention` runners.
+- [x] **OpenRouter Kling 3.0 adapter (PRODUCTION PROVIDER)**: `src/ai_gen/openrouter_kling.py` — `OpenRouterKlingClient(Provider)` adapter for `kwaivgi/kling-v3.0-std` via `POST https://openrouter.ai/api/v1/videos`; Bearer auth via `OPENROUTER_API_KEY` env var (never hardcoded); 23 unit tests in `tests/ai_gen/test_openrouter_kling.py`. This adapter supersedes the direct-Kling `src/ai_gen/kling.py` (blocked on API activation) and the Seedance worktree spike (abandoned).
+- [x] **AI gen base + runner**: `src/ai_gen/base.py` Provider ABC; `src/ai_gen/runner.py` `generate_shots()` with threading.Semaphore concurrency; `src/ai_gen/kling.py` direct-Kling adapter (retained as fallback; not the production path).
 
-### Pivot.6.6 — Dry-Run to Scheduled Upload
-- [ ] `gen_run.py` — full orchestrator: loop `clips_per_day × days_per_run`; run lock + `runs.md`; `--dry-run` and `--clips N` flags
-- [ ] `bootstrap.py --check` — verify `KLING_API_KEY`, `edge-tts`, ffmpeg concat, Ollama, Whisper, NVENC; drop `yt-dlp` check
-- [ ] `gen_run.py --dry-run --clips 1` — complete pending mp4 without uploading
-- [ ] `gen_run.py --clips 3` → user drag-approve → `daily_upload.py` → 3 Shorts on test channel
-- [ ] Monitor 48 h: `logs/alerts.md` + YouTube Studio (no Content ID flags) + Kling dashboard (cost ≈ ledger ±5%)
-- [ ] Retention TTL config updated (`ai_gen_shots` 7 d, `narration` 14 d; remove `raw_video`, `transcripts`)
-- [ ] **Acceptance:** 3 AI-generated Shorts live; user signs off to scale to `clips_per_day=4`
+---
+
+### Active slices
+
+> See `plan.md` for the readable narrative of each slice. This section is the per-task checklist.
+
+#### Slice 1 — Niche + direction lock (docs only) · HITL · no blockers
+- [x] Rewrite `plan.md` — inline 10-slice tracker, drop broken `.claude/plans/...` reference (2026-05-18)
+- [x] Rewrite `CLAUDE.md` — niche corrected to Tech/AI news, provider to OpenRouter Kling 3.0, style to clean editorial, narration to `+10%/0Hz`, broken plan refs removed (2026-05-18)
+- [x] Rewrite `progress.md` Pivot.6 section — new 10-slice structure, preserve Architecture Deepening history (2026-05-18)
+- [x] Update `skills.md` — replaced direct-Kling section with OpenRouter Kling 3.0, added `feedparser` for RSS, updated narration tuning (`+10%/0Hz`), updated cost model ($5/wk → 2-3 clips) (2026-05-18)
+- [x] Update `agents.md` — added `topic_ingest/` module, corrected provider/style/narration references, replaced `topic_pool` flow with RSS flow, added `topics`/`seen_topics` to state schema (2026-05-18)
+- [x] **Acceptance:** Cold-read of `CLAUDE.md` + `plan.md` tells a fresh agent exactly what to build. No active references to "weird/unsettling facts." Direct `KLING_API_KEY` mentioned only as the *dropped* check. No broken file links in the active doc set. (2026-05-18)
+
+#### Slice 2 — OpenRouter Kling 3.0 live spike · HITL · blocked by Slice 1
+- [ ] Hand-craft 10 prompts in the clean editorial style suffix
+- [ ] Call `src/ai_gen/openrouter_kling.py` directly with each prompt → download 10 MP4 shots
+- [ ] Record per-shot cost in a scratch table (no DB writes yet)
+- [ ] User reviews aesthetic — sign-off or iterate on style suffix
+- [ ] **Acceptance:** 10 MP4 shots produced at 1080×1920. Per-shot cost averaged. Cost projection for one clip (4 shots) ≤ budget. User signs off on aesthetic.
+
+#### Slice 3 — Schema migration · AFK · blocked by Slice 1
+- [ ] `CREATE TABLE topics (id, url, title, summary, source_feed, fetched_at, status)`
+- [ ] `CREATE TABLE seen_topics (url_hash, title_normalized, first_seen_at)` — dedup ledger
+- [ ] `CREATE TABLE scripts (script_id, topic_id FK, title, narration, shots_json, style_suffix, ollama_model, created_at, status)`
+- [ ] `CREATE TABLE generation_jobs (job_id, script_id FK, shot_index, provider, prompt, duration_s, status, external_id, output_path, cost_cents, submitted_at, completed_at, error)`
+- [ ] `ALTER TABLE clips ADD COLUMN content_kind TEXT NOT NULL DEFAULT 'sourced'`
+- [ ] `ALTER TABLE clips ADD COLUMN script_id TEXT` (nullable FK)
+- [ ] Relax `clips.video_id` to nullable
+- [ ] `ALTER TABLE quota_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'youtube'`
+- [ ] Idempotent migration script in `scripts/`
+- [ ] New repo helpers: `insert_topic`, `seen_topics_in_window`, `mark_topic_scripted`, `insert_script`, `insert_generation_job`, `update_job_status`, `clips_for_generation_run`, `get_clip_with_script`
+- [ ] `pytest tests/state/` green post-migration
+- [ ] Regression: `daily_upload.py --dry-run` on a legacy `quality_pass` clip still produces correct body
+- [ ] **Acceptance:** Migration applies cleanly to existing `data/state.db`. All 457 existing tests still green. New DAL helper tests pass.
+
+#### Slice 4 — Hand-script tracer bullet · AFK · blocked by Slices 2, 3
+- [ ] Create `scripts/render_from_script.py` — takes hand-written `{title, narration, shots[]}` JSON, produces one MP4 in `output/pending/`
+- [ ] Wire `OpenRouterKlingClient` → 4 shots, ~4 s each
+- [ ] Wire `narration` module — Edge TTS `en-US-GuyNeural` rate `+10%` pitch `0Hz`
+- [ ] Wire `assembler` module — concat shots → mux narration → music duck → NVENC 1080×1920 → 2-pass −14 LUFS (no subtitles yet)
+- [ ] Reuse `editor/music.py`, `editor/ffmpeg_runner.py`, `editor/slug.py` helpers
+- [ ] **Acceptance:** Hand-written test script → one watchable MP4 in `output/pending/` with clean editorial visuals, natural-paced narration, music bed under voice. User confirms aesthetic + audio. No subtitles yet.
+
+#### Slice 5 — Subtitles · AFK · blocked by Slice 4
+- [ ] `src/narration/runner.py` — extend to extract Whisper forced-align per-word timings dict
+- [ ] `src/subtitles/ass_writer.py` — replace karaoke with line-at-a-time: ≤28 chars/line, word-boundary break, `\pos(540, 1500)`, 100 ms fade-in
+- [ ] Archive old karaoke writer to `_karaoke_legacy.py`
+- [ ] Wire ASS burn into `scripts/render_from_script.py`
+- [ ] `tests/subtitles/` — line-break tests, timing-drift tests, ASS escape tests
+- [ ] **Acceptance:** Same hand-script tracer clip now has readable, in-sync subtitles. User confirms timing + positioning.
+
+#### Slice 6 — Scripter (topic → script via Ollama) · AFK · blocked by Slice 3
+- [ ] `src/scripter/runner.py` — topic (title + summary) → Ollama `qwen2.5:3b-instruct` JSON-mode → pydantic-validated `{title, narration ≈40 words, shots[4], style_notes}`
+- [ ] Rubric: hook in first 5 words, 1–2 punchy stats, ends on teaser
+- [ ] Persist to `scripts` table; stub `clips` row with `content_kind='ai_generated'`
+- [ ] Policy gate runs on `script.narration` + `script.title`; retry up to `retry_on_policy_reject`
+- [ ] `tests/scripter/` — ≥10 unit tests (validation, retry, persistence)
+- [ ] **Acceptance:** 5 hand-picked tech topics → 5 valid scripts. Eyeball pass on quality. Policy rejection rate ≤30%.
+
+#### Slice 7 — RSS topic ingest · AFK · blocked by Slice 3
+- [ ] `src/topic_ingest/fetcher.py` — `feedparser` wrapper, last-48 h filter
+- [ ] `src/topic_ingest/dedup.py` — URL hash + normalized-title similarity (Levenshtein or word-set overlap, configurable threshold)
+- [ ] `src/topic_ingest/runner.py` — `fetch_unscripted_topics(cfg, repo) -> list[Topic]` public interface
+- [ ] CLI: `python -m src.topic_ingest [--dry-run] [--config alt.yaml]`
+- [ ] **DELIVERABLE: `docs/rss_feeds.md`** — recommended mixed consumer + research feeds (The Verge, TechCrunch AI, Ars Technica, MIT Tech Review, Hacker News tech tag, etc.) with setup instructions
+- [ ] `tests/topic_ingest/` — HTTP-mocked fetch, dedup matrix, edge cases (empty feed, malformed XML)
+- [ ] **Acceptance:** Given 3+ real RSS feed URLs in `config.yaml`, recent tech/AI items appear in `topics` table. Running ingest twice within 48 h produces zero duplicates. Reposted-same-story-different-URL caught by title-similarity. Feed-recommendations doc delivered.
+
+#### Slice 8 — `gen_run.py` orchestrator · AFK · blocked by Slices 4, 5, 6, 7
+- [ ] `src/gen_run.py` — orchestrator: `topic_ingest` → `scripter` → `ai_gen` → `narration` → `assembler` → `policy_gate` → `quality_screen` → `slot_planner`
+- [ ] Run lock (`data/.weekly_run.lock`); `runs.md` writer
+- [ ] `--dry-run` and `--clips N` flags
+- [ ] `bootstrap.py --check` — verify `OPENROUTER_API_KEY`, `edge-tts`, `feedparser`, ffmpeg+NVENC, Ollama, Whisper; drop `yt-dlp`/`KLING_API_KEY` direct checks
+- [ ] Retention TTL config updated (`ai_gen_shots` 7 d, `narration` 14 d, `topics` 30 d; remove `raw_video`, `transcripts`)
+- [ ] `tests/test_gen_run.py` — happy path, dry-run, run-lock contention, stage failure short-circuit
+- [ ] **Acceptance:** `python -m src.gen_run --dry-run --clips 1` walks full pipeline, no DB writes. Real `--clips 3` produces 3 clips in `output/pending/` from real RSS-fed topics.
+
+#### Slice 9 — Compliance refit (AI disclosure) · AFK · blocked by Slice 3
+- [ ] `uploader/templater.py` — branch on `content_kind='ai_generated'`: drop source/channel attribution, add "Made with AI. For entertainment / educational use." footer + topic hashtag
+- [ ] `uploader/insert_body.py` — research `altered_content` / `madeWithAi` v3 API field, set when exposed, document manual Studio attestation fallback otherwise
+- [ ] `quota_ledger/ledger.py` — `provider` dimension through `record()` / `check_or_raise()`; daily OpenRouter spend ceiling
+- [ ] `tests/uploader/test_ai_disclosure.py` — dry-run JSON contains AI footer, source/channel absent, disclosure flag set
+- [ ] **Acceptance:** Dry-run uploader JSON shows correct AI-gen description, no source/channel field, AI disclosure flag set (or fallback documented).
+
+#### Slice 10 — First live AI-generated upload · HITL · blocked by Slices 8, 9
+- [ ] User drags one Slice 8 output from `output/pending/` → `output/approved/`
+- [ ] `python -m src.daily_upload` (real, not dry-run) → 1 Short uploaded
+- [ ] User verifies AI disclosure visible in YouTube Studio
+- [ ] Compare `quota_usage(provider='openrouter')` total against OpenRouter dashboard
+- [ ] Monitor 48 h: `logs/alerts.md` clean, no Content ID flag, cost within ±5%
+- [ ] **Acceptance:** 1 AI-generated Short live on test channel. AI disclosure visible. No Content ID flag. Cost recorded within ±5% of OpenRouter dashboard.

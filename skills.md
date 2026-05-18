@@ -1,19 +1,26 @@
 # Tools, Libraries & APIs
 
-> **Pivot.6 (current):** yt-dlp and mostReplayed are no longer used. Ollama's role has shifted from clip-ranker to script-writer. New additions: Kling AI (video generator), edge-tts (TTS narration), Whisper now used for forced-alignment of TTS output rather than source-video transcription.
+> **Pivot.6 (current — Tech/AI news):** yt-dlp and mostReplayed are no longer used. Ollama's role has shifted from clip-ranker to script-writer. New additions: OpenRouter Kling 3.0 std (video generator), edge-tts (TTS narration), `feedparser` (RSS topic ingest), Whisper now used for forced-alignment of TTS output rather than source-video transcription.
 
 ## Language & Runtime
 - **Python 3.11+** — best ecosystem fit for all project dependencies. Single-language project.
 - **ffmpeg** (system binary, Gyan 8.1-full_build) — concat, mux, loudnorm, ASS burn, NVENC encode. Must be on PATH.
 
 ## AI Video Generation (NEW — Pivot.6)
-- **Kling AI** (REST API, `KLING_API_KEY`) — text-to-video generator. Native 9:16 output at 1080×1920. Supports 5–10 s shot duration. Provider is abstracted behind `src/ai_gen/base.Provider` ABC so Pika 2.0 or MiniMax-Hailuo can be swapped in with ~½-day effort. Chosen over Runway Gen-3 (too cinematic) and Pika (less 3D-animated quality) after the Pivot.6.1 spike.
-- **Cost model:** per-second pricing; ~$50–$150/mo at 28 clips/week × 30 s. Enforced by `per_clip_cost_cents_max` + `daily_spend_cents_ceiling` in `quota_ledger`.
+- **OpenRouter Kling 3.0 std** (`kwaivgi/kling-v3.0-std`, accessed via OpenRouter REST API, `OPENROUTER_API_KEY`) — text-to-video generator. Native 9:16 output at 1080×1920. ~4 s shot duration, 4 shots stitched per clip. Bearer auth (no JWT signing). Implementation: `src/ai_gen/openrouter_kling.py` (`OpenRouterKlingClient(Provider)`, 23 unit tests).
+- **Provider seam:** `src/ai_gen/base.Provider` ABC. Pika 2.0, MiniMax-Hailuo, and Seedance are drop-in replacements with ~½-day effort. Direct Kling API adapter (`src/ai_gen/kling.py`) retained as a fallback, not the production path (was blocked on error 1003 "Authorization not active").
+- **Why OpenRouter over direct Kling:** API activation is immediate, billing aggregates across providers in one place, single env var simplifies key rotation. Switching providers requires no downstream pipeline changes.
+- **Cost model:** per-second pricing; **$5/week budget → 2–3 clips/week at ~$2/clip**. Scales to ~$80/mo at 4 clips/day. Enforced by `per_clip_cost_cents_max` + `daily_spend_cents_ceiling` in `quota_ledger`.
 
 ## TTS Narration (NEW — Pivot.6)
-- **`edge-tts`** (PyPI, free) — Microsoft Azure neural TTS via the unofficial public endpoint. No API key required. Voice `en-US-GuyNeural` (calm male). Rate `-8%`, pitch `-2Hz`.
-- Why free over ElevenLabs: user requirement is zero additional paid services. Edge TTS quality is acceptable for this format; robotic quality is partially mitigated by the rate/pitch tweaks.
+- **`edge-tts`** (PyPI, free) — Microsoft Azure neural TTS via the unofficial public endpoint. No API key required. Voice `en-US-GuyNeural`. Rate `+10%`, pitch `0Hz` — natural conversational pacing (not slow/calm, not crammed; engaged-friend cadence).
+- Why free over ElevenLabs: user requirement is zero additional paid services. Edge TTS quality is acceptable for this format.
 - **Degraded-mode fallback:** `pyttsx3` (offline, SAPI5 voices) if Edge TTS throttles. Quality is lower but non-blocking.
+
+## RSS Topic Ingest (NEW — Pivot.6)
+- **`feedparser`** (PyPI) — RSS/Atom feed parsing. Pulls last-48h items from mixed consumer + research tech/AI feeds. Source-of-truth for topic selection; replaces the static `topic_pool` config.
+- **Dedup:** URL hash (SHA-256 of `<link>`) + normalized-title similarity (Levenshtein or word-set overlap, configurable threshold). Catches reposts where the same story has different URLs across Verge / TechCrunch / etc.
+- **Feed list:** user-curated, configured at Slice 7. Recommended feeds documented in `docs/rss_feeds.md`.
 
 ## Video Acquisition (LEGACY — not used in Pivot.6)
 - **`yt-dlp`** (Python API) — was used for YouTube source-video downloads and caption sidecar retrieval (Phases 1–7, Pivots.0–5). Retained in `requirements.txt` but no code path calls it in Pivot.6. Will be removed when the `discovery/` and `downloader/` modules are fully deleted.
@@ -85,6 +92,6 @@
 - **Runway Gen-3 / Sora** — Runway is expensive and cinematic-skewed (weak for 3D-animated); Sora is not publicly accessible via API.
 
 ## Cost Model (Pivot.6)
-- Edge TTS / Whisper / Ollama / ffmpeg / YouTube API: all **free**
-- **Kling AI:** ~$50–$150/mo at 28 clips/week × 30 s/clip. Only paid service.
-- **Total: ~$50–$150/month** depending on Kling pricing tier and shot duration.
+- Edge TTS / Whisper / Ollama / ffmpeg / YouTube API / RSS fetching: all **free**
+- **OpenRouter Kling 3.0 std:** ~$2/clip at 4 shots × ~4 s. **$5/week budget → 2–3 clips/week** (current cadence). Scales to ~$80/month at 4 clips/day if budget grows.
+- **Total: ~$5/week to ~$80/month** depending on cadence. Only paid dependency.

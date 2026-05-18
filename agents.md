@@ -28,25 +28,34 @@ Retired because: no source video to slice. Code + ~55 tests deleted.
 
 ---
 
+## 🆕 `topic_ingest/` — RSS Topic Ingest (NEW Pivot.6)
+**Job:** Fetch fresh tech/AI news topics from configured RSS feeds, dedup against previously-scripted stories, populate `topics` table.
+**Inputs:** `config.topic_ingest.feeds` (list of RSS URLs), `config.topic_ingest.recency_hours` (48 h default), `config.topic_ingest.title_similarity_threshold`.
+**Outputs:** `topics` table rows (`id`, `url`, `title`, `summary`, `source_feed`, `fetched_at`, `status='unscripted'`); `seen_topics` ledger rows for dedup (`url_hash`, `title_normalized`, `first_seen_at`).
+**Dedup logic:** SHA-256 of `<link>` (exact) + normalized-title similarity (Levenshtein or word-set overlap; configurable threshold). Catches reposts across Verge / TechCrunch / Ars where the same story has different URLs.
+**Library:** `feedparser` for RSS/Atom parsing.
+**Failure modes:** unreachable feed → log + skip + continue with remaining feeds (not fatal). Empty result set → alert in `logs/alerts.md` (kind=`rss_empty`).
+**Public interface (deep module seam):** `fetch_unscripted_topics(cfg, repo) -> list[Topic]`.
+
 ## 🆕 `scripter/` — Script Generator (NEW Pivot.6)
-**Job:** Produce a complete `{title, narration, shots[], style_notes}` JSON script from a topic seed.
-**Inputs:** topic seed (round-robined from `config.scripter.topic_pool`), Ollama `qwen2.5:3b-instruct` JSON-mode.
-**Outputs:** `scripts` table row (`script_id`, `topic_seed`, `title`, `narration`, `shots_json`, `style_suffix`, `status='scripted'`); stub `clips` row (`content_kind='ai_generated'`, `script_id`, `video_id=NULL`).
-**Rubric (locked):** hook in first 8 words, ~75 words narration, 4–6 shots each ≤10 s, no phobias / graphic medical / self-harm. Schema validated with pydantic; single retry on validation fail.
+**Job:** Produce a complete `{title, narration, shots[], style_notes}` JSON script from one queued topic.
+**Inputs:** unscripted topic row from `topics` table (title + summary), Ollama `qwen2.5:3b-instruct` JSON-mode.
+**Outputs:** `scripts` table row (`script_id`, `topic_id` FK, `title`, `narration`, `shots_json`, `style_suffix`, `status='scripted'`); stub `clips` row (`content_kind='ai_generated'`, `script_id`, `video_id=NULL`).
+**Rubric (locked, Tech/AI niche):** hook in first 5 words, ~40 words narration, 4 shots × ~4 s each, 1–2 punchy stats, ends on a teaser. Schema validated with pydantic; single retry on validation fail.
 **Failure:** `scripts.status='rejected_policy'` if policy_gate rejects; retry up to `scripter.retry_on_policy_reject`.
 
 ## 🆕 `ai_gen/` — AI Video Generator Client (NEW Pivot.6)
 **Job:** Submit shot prompts to an AI video generator, poll for completion, download mp4s.
-**Design:** `base.Provider` ABC (`submit`, `poll`, `download`, `last_cost_cents`). `kling.KlingClient` is the concrete impl for Pivot.6. `pika.PikaClient` and `minimax.MiniMaxClient` are ready drop-in slots.
+**Design:** `base.Provider` ABC (`submit`, `poll`, `download`, `last_cost_cents`). **Production impl: `openrouter_kling.OpenRouterKlingClient`** (Kling 3.0 std `kwaivgi/kling-v3.0-std` via OpenRouter REST API, Bearer auth via `OPENROUTER_API_KEY`). `kling.KlingClient` (direct Kling JWT auth) retained as fallback. `pika.PikaClient` / `minimax.MiniMaxClient` / `seedance.SeedanceClient` are ready drop-in slots.
 **Inputs:** `scripts` row + `generation_jobs` table (persisted per shot for idempotency).
-**Outputs:** `data/ai_gen/{script_id}/shot_{i}.mp4`; `generation_jobs.status='succeeded'`; cost recorded in `quota_usage(provider='kling')`.
-**Concurrency:** asyncio with `max_concurrent_jobs=2` (config-driven).
+**Outputs:** `data/ai_gen/{script_id}/shot_{i}.mp4`; `generation_jobs.status='succeeded'`; cost recorded in `quota_usage(provider='openrouter')`.
+**Concurrency:** `threading.Semaphore` with `max_concurrent_jobs=2` (config-driven).
 **Cost guard:** `per_clip_cost_cents_max` enforces per-clip abort; `daily_spend_cents_ceiling` in quota_ledger enforces daily hard stop.
-**Style suffix:** appended to every shot prompt — "3D animated, Pixar-shaded surface, surreal cinematic lighting, vertical 9:16, photoreal textures with stylized characters, dark moody atmosphere".
+**Style suffix (locked, Tech/AI niche):** appended to every shot prompt — `"clean editorial product photography, soft studio lighting, neutral backgrounds, minimalist composition, sharp focus, vertical 9:16, premium tech magazine look"`.
 
 ## 🆕 `narration/` — TTS Narration (NEW Pivot.6)
 **Job:** Convert `script.narration` text → mp3 + per-word timings.
-**Engine:** `edge-tts` (free, Microsoft neural voices). Voice: `en-US-GuyNeural`, rate `-8%`, pitch `-2Hz`.
+**Engine:** `edge-tts` (free, Microsoft neural voices). Voice: `en-US-GuyNeural`, rate `+10%`, pitch `0Hz` — natural conversational pacing (engaged-friend cadence; not calm/slow, not crammed).
 **Word timings:** Whisper `large-v3` int8_float16 on CUDA run on the TTS mp3 → forced-align word timestamps. TTS audio is always clean → very fast/accurate transcription.
 **Outputs:** `data/narration/{script_id}.mp3` + word-timings dict (used by subtitle writer).
 **Degraded mode:** `pyttsx3` offline fallback if Edge TTS is throttled.
@@ -91,14 +100,14 @@ Retired because: no source video to slice. Code + ~55 tests deleted.
 **Job:** Publish a `quality_pass` (or `approved`) clip to YouTube as a Short with a future `publishAt`.
 **Unchanged:** orphan-marker fence, pre-upload re-check, quota guard, dry-run mode, `publish_at_utc` padding (20 min lead), resumable upload with tenacity.
 **Changed for Pivot.6 (`content_kind='ai_generated'`):**
-- `templater.py` — description drops `Source: url` + `Original channel: name`; replaces with `Generated with Kling AI` + `compliance.description_footer` + topic hashtag. Tags from `upload_extra_tags` config key.
-- `insert_body.py` — `altered_content` / `madeWithAi` flag set when `compliance.ai_disclosure=true`. (Exact v3 API field name to be confirmed at Pivot.6.5 — manual Studio attestation if not yet exposed.)
+- `templater.py` — description drops `Source: url` + `Original channel: name`; replaces with `compliance.description_footer` ("Made with AI. For entertainment / educational use.") + topic hashtag. Tags from `upload_extra_tags` config key.
+- `insert_body.py` — `altered_content` / `madeWithAi` flag set when `compliance.ai_disclosure=true`. (Exact v3 API field name to be confirmed at Slice 9 — manual Studio attestation if not yet exposed.)
 - `runner.py` — `get_clip_with_video` join becomes LEFT JOIN; templater receives `content_kind` for routing.
 
 ## 🔧 `quota_ledger/` — Per-Endpoint Quota Tracker (provider dimension added Pivot.6)
 **Job:** Prevent silent quota overruns across all billed APIs.
 **Schema update:** `quota_usage` gains `provider TEXT NOT NULL DEFAULT 'youtube'`. Existing rows backfill to `'youtube'`.
-**New provider:** `provider='kling'`, `units=cost_cents`. Daily ceiling enforced separately from YouTube units.
+**New provider:** `provider='openrouter'`, `units=cost_cents`. Daily ceiling enforced separately from YouTube units.
 **API unchanged:** `record(endpoint, units, provider)`, `today_total(provider)`, `would_exceed(units, ceiling, provider)`.
 
 ## 🔧 `state/` — State Store (schema bridge Pivot.6)
@@ -106,46 +115,50 @@ Retired because: no source video to slice. Code + ~55 tests deleted.
 - `clips.content_kind TEXT NOT NULL DEFAULT 'sourced'` — `'sourced'` (legacy) | `'ai_generated'` (Pivot.6+).
 - `clips.script_id TEXT` — FK → `scripts(script_id)`, nullable.
 - `clips.video_id` — relaxed to nullable for `ai_generated` rows (was NOT NULL).
-- `scripts` table (new) — `script_id PK, topic_seed, title, narration, shots_json, style_suffix, ollama_model, created_at, status`.
+- `topics` table (new) — `id PK, url, title, summary, source_feed, fetched_at, status`. Status: `'unscripted' | 'scripted' | 'expired'`.
+- `seen_topics` table (new) — `url_hash PK, title_normalized, first_seen_at`. Dedup ledger.
+- `scripts` table (new) — `script_id PK, topic_id FK, title, narration, shots_json, style_suffix, ollama_model, created_at, status`.
 - `generation_jobs` table (new) — `job_id PK, script_id, shot_index, provider, prompt, duration_s, status, external_id, output_path, cost_cents, submitted_at, completed_at, error`.
 - `quota_usage.provider` column (new).
 **Tables NOT dropped (Pivot.6):** `videos`, `dup_hashes`, `niche_baselines`, `discovery_attempts` — inert for new content but referenced by historic rows. Drop in a future cleanup pivot.
-**New repository helpers:** `insert_script`, `insert_generation_job`, `update_job_status`, `clips_for_generation_run`, `get_clip_with_script`.
+**New repository helpers:** `insert_topic`, `seen_topics_in_window`, `mark_topic_scripted`, `insert_script`, `insert_generation_job`, `update_job_status`, `clips_for_generation_run`, `get_clip_with_script`.
 
 ## ✅ `slot_planner/` — Slot Planner (unchanged)
 **Job:** Assign `publish_at_utc` timestamps to rendered clips, spaced evenly across the next `days_per_run` days at configured slots. Rename files in place. Missed-slot recovery batches stale → next future slot. Future-too-near pad of 20 min.
 
 ## 🔧 `retention/` — Cleanup (TTLs updated Pivot.6)
-**New TTLs:** `data/ai_gen/{script_id}/` — 7 d post-render. `data/narration/` — 14 d. `scripts` rows — 90 d.
+**New TTLs:** `data/ai_gen/{script_id}/` — 7 d post-render. `data/narration/` — 14 d. `scripts` rows — 90 d. `topics` rows — 30 d post-`fetched_at`.
 **Dropped TTLs:** `data/raw/*.mp4` (14 d) and `data/transcripts/*.json` (90 d) — no longer produced.
 **Unchanged:** `output/pending|approved` 7 d post-upload, `dup_hashes` 90 d, `quota_usage` 90 d, monthly VACUUM.
 
 ## ✅ `observability/` — Logging & Alerts (unchanged)
-**Stack:** `loguru` → `logs/agent.log` (daily rotation, 30-day retention). `logs/alerts.md` — one row appended on: weekly run finished, run failure, quota > 80% used (per provider), upload rejected, missed-slot recovery, Kling spend near cap. `logs/runs.md` — per-run summary (kind, started_at, finished_at, success, summary).
+**Stack:** `loguru` → `logs/agent.log` (daily rotation, 30-day retention). `logs/alerts.md` — one row appended on: weekly run finished, run failure, quota > 80% used (per provider), upload rejected, missed-slot recovery, OpenRouter spend near cap, `rss_empty`. `logs/runs.md` — per-run summary (kind, started_at, finished_at, success, summary).
 
 ## ✅ `config_loader/` — Config Loader (new keys added, otherwise unchanged)
-New config sections: `ai_gen.*`, `scripter.*`, `narration.*`, `subtitles.*`, `compliance.*`. Old discovery/lang_detect/selector/blurred_bg keys moved to `config.archive.yaml`.
+New config sections: `topic_ingest.*`, `ai_gen.*`, `scripter.*`, `narration.*`, `subtitles.*`, `compliance.*`. Old discovery/lang_detect/selector/blurred_bg keys moved to `config.archive.yaml`.
 
 ## 🔧 `bootstrap.py` — Environment Health Check (updated Pivot.6)
-**New checks:** `KLING_API_KEY` env var set, `edge-tts` importable, ffmpeg concat smoke, Whisper load. **Dropped check:** `yt-dlp` availability.
+**New checks:** `OPENROUTER_API_KEY` env var set, `edge-tts` importable, `feedparser` importable, ffmpeg concat smoke, Whisper load. **Dropped check:** `yt-dlp` availability, direct `KLING_API_KEY`.
 
 ## ✅ `daily_upload.py` — Daily Upload Entrypoint (unchanged)
 Reads `clips_for_upload_due()`, runs policy re-check, calls uploader. Run lock + `runs.md` writer. `--dry-run` aware. Content-agnostic — templating branch is inside `uploader/`.
 
 ## 🆕 `gen_run.py` — Weekly Generation Entrypoint (NEW Pivot.6, replaces `weekly_run.py`)
-**Job:** Full weekly orchestration: `scripter → policy_gate → ai_gen → narration → assembler → quality_screen → slot_planner → retention`. Run lock (`data/.weekly_run.lock`) + `runs.md` writer. `--dry-run` and `--clips N` flags.
+**Job:** Full weekly orchestration: `topic_ingest → scripter → policy_gate → ai_gen → narration → assembler → quality_screen → slot_planner → retention`. Run lock (`data/.weekly_run.lock`) + `runs.md` writer. `--dry-run` and `--clips N` flags.
 
 ---
 
 ## Data Flow (Pivot.6)
 ```
-topic seed pool → [scripter] (Ollama qwen2.5:3b → scripts table + clips stub)
+RSS feeds → [topic_ingest] (feedparser; 48h window; URL + title-similarity dedup → topics + seen_topics tables)
+                        ↓
+                  [scripter] (Ollama qwen2.5:3b on topic.title+summary → scripts table + clips stub, content_kind='ai_generated')
                         ↓
                [policy_gate] (banlist/profanity/NSFW/hook_sanity on narration+title)
                         ↓
-                  [ai_gen] (Kling × 4–6 shots, async, generation_jobs table) → data/ai_gen/{script_id}/shot_{i}.mp4
+                  [ai_gen] (OpenRouter Kling 3.0 × 4 shots × ~4s, threading.Semaphore, generation_jobs table) → data/ai_gen/{script_id}/shot_{i}.mp4
                         ↓
-                [narration] (Edge TTS → mp3; Whisper forced-align → word timings) → data/narration/{script_id}.mp3
+                [narration] (Edge TTS +10%/0Hz → mp3; Whisper forced-align → word timings) → data/narration/{script_id}.mp3
                         ↓
                [assembler] (concat shots → mux narration → music-bed duck → ASS line-burn → NVENC 1080×1920 → −14 LUFS)
                         ↓ output/pending/__unscheduled__{clip_id}__{slug}.mp4
