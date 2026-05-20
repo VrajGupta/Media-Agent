@@ -12,6 +12,21 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
+class TopicIngestConfig(BaseModel):
+    feeds: list[str] = Field(default_factory=list)
+    recency_hours: int = 48
+    seen_topics_window_days: int = 30
+    jaccard_threshold: float = 0.6
+    stopwords: list[str] = Field(default_factory=lambda: [
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "must", "at", "by", "for", "from", "in",
+        "of", "on", "to", "up", "with", "about", "after", "and", "as", "but",
+        "if", "into", "or", "so", "than", "that", "this", "too", "when",
+        "where", "while", "just", "it", "its", "says", "said", "new", "over",
+    ])
+
+
 class AiGenConfig(BaseModel):
     model: str = "kwaivgi/kling-v3.0-std"
     per_clip_cost_cents_max: int
@@ -26,16 +41,46 @@ class AiGenConfig(BaseModel):
     )
 
 
+class TopicScoreWeights(BaseModel):
+    novelty: float = 0.4
+    specificity: float = 0.3
+    tension: float = 0.3
+
+
+class ScriptScoreWeights(BaseModel):
+    hook_execution: float = 0.4
+    pacing: float = 0.3
+    payoff: float = 0.3
+
+
 class ScripterConfig(BaseModel):
-    topic_pool: list[str]
-    target_word_count: int = 80
-    max_retries: int = 3
+    categories: list[str] = Field(default_factory=lambda: [
+        "ai_models", "ai_features", "hardware", "software",
+        "policy", "business", "science_research", "startup_funding",
+    ])
+    candidate_pool_size: int = 4
+    topic_score_weights: TopicScoreWeights = Field(default_factory=TopicScoreWeights)
+    script_score_weights: ScriptScoreWeights = Field(default_factory=ScriptScoreWeights)
+    quality_floor: float = 6.0
+    weekly_clip_target: int = 2
+    style_suffix: str = (
+        "clean editorial product photography, soft studio lighting, "
+        "neutral backgrounds, minimalist composition, sharp focus, "
+        "vertical 9:16, premium tech magazine look"
+    )
+    narration_word_count_min: int = 30
+    narration_word_count_max: int = 50
+    hook_word_count: int = 5
+    banned_tokens: list[str] = Field(default_factory=lambda: [
+        "<<placeholder>>", "I think", "as an AI",
+    ])
+    retry_on_failure: int = 3
 
 
 class NarrationConfig(BaseModel):
     voice: str = "en-US-GuyNeural"
-    rate: str = "-8%"
-    pitch: str = "-2Hz"
+    rate: str = "+10%"
+    pitch: str = "0Hz"
 
 
 class SubtitlesConfig(BaseModel):
@@ -131,9 +176,10 @@ class Config(BaseModel):
     videos_insert_unit_cost: int
 
     # Pivot.6 sub-models
+    topic_ingest: TopicIngestConfig = Field(default_factory=TopicIngestConfig)
     ai_gen: AiGenConfig
-    scripter: ScripterConfig
-    narration: NarrationConfig
+    scripter: ScripterConfig = Field(default_factory=ScripterConfig)
+    narration: NarrationConfig = Field(default_factory=NarrationConfig)
     subtitles: SubtitlesConfig = Field(default_factory=SubtitlesConfig)
     compliance: ComplianceConfig = Field(default_factory=ComplianceConfig)
 

@@ -578,6 +578,164 @@ class Repository:
         """Return True if recording `units` more would push today's total past ceiling."""
         return (self.quota_today_total() + units) > ceiling
 
+    # ---- Pivot.6: topics ----
+
+    def unscripted_topics(self) -> list[sqlite3.Row]:
+        """Return all topics with status='unscripted', oldest first."""
+        return self.conn.execute(
+            "SELECT * FROM topics WHERE status='unscripted' ORDER BY id ASC"
+        ).fetchall()
+
+    def update_topic_score(
+        self,
+        topic_id: int,
+        topic_score_json: str,
+        weighted_score: float,
+        category: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            "UPDATE topics SET topic_score_json=?, weighted_score=?, category=? WHERE id=?",
+            (topic_score_json, weighted_score, category, topic_id),
+        )
+
+    def mark_topic_scored(self, topic_id: int) -> None:
+        self.conn.execute("UPDATE topics SET status='scored' WHERE id=?", (topic_id,))
+
+    def insert_topic(
+        self,
+        *,
+        url: str,
+        title: str,
+        source_feed: str,
+        fetched_at: str,
+        summary: str | None = None,
+        published_at: str | None = None,
+    ) -> int:
+        """Insert a new unscripted topic. Returns the auto-incremented id."""
+        cur = self.conn.execute(
+            """
+            INSERT INTO topics (url, title, summary, source_feed, fetched_at, published_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (url, title, summary, source_feed, fetched_at, published_at),
+        )
+        return cur.lastrowid
+
+    def insert_seen_topic(
+        self,
+        *,
+        url_hash: str,
+        title_normalized: str,
+        first_seen_at: str,
+    ) -> None:
+        """Insert a seen_topic row for future dedup. Ignores PK conflicts (idempotent)."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO seen_topics (url_hash, title_normalized, first_seen_at) "
+            "VALUES (?, ?, ?)",
+            (url_hash, title_normalized, first_seen_at),
+        )
+
+    def seen_topics_in_window(self, days: int) -> list[sqlite3.Row]:
+        """Return seen_topics rows first_seen_at within the last N days."""
+        return self.conn.execute(
+            "SELECT * FROM seen_topics WHERE first_seen_at >= datetime('now', ?)",
+            (f"-{int(days)} days",),
+        ).fetchall()
+
+    def mark_topic_scripted(self, topic_id: int) -> None:
+        self.conn.execute("UPDATE topics SET status='scripted' WHERE id=?", (topic_id,))
+
+    def mark_topic_expired(self, topic_id: int) -> None:
+        self.conn.execute("UPDATE topics SET status='expired' WHERE id=?", (topic_id,))
+
+    # ---- Pivot.6: scripts ----
+
+    def insert_script(
+        self,
+        *,
+        script_id: str,
+        topic_id: int,
+        title: str,
+        narration: str,
+        shots_json: str,
+        style_suffix: str,
+        ollama_model: str,
+        created_at: str,
+        topic_score_json: str | None = None,
+        category: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO scripts (
+                script_id, topic_id, title, narration, shots_json,
+                style_suffix, ollama_model, created_at,
+                topic_score_json, category
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (script_id, topic_id, title, narration, shots_json,
+             style_suffix, ollama_model, created_at,
+             topic_score_json, category),
+        )
+
+    def update_script_status(
+        self,
+        script_id: str,
+        status: str,
+        *,
+        rejection_reason: str | None = None,
+        quality_score: float | None = None,
+        quality_score_json: str | None = None,
+    ) -> None:
+        sets = ["status=?"]
+        params: list = [status]
+        if rejection_reason is not None:
+            sets.append("rejection_reason=?")
+            params.append(rejection_reason)
+        if quality_score is not None:
+            sets.append("quality_score=?")
+            params.append(quality_score)
+        if quality_score_json is not None:
+            sets.append("quality_score_json=?")
+            params.append(quality_score_json)
+        params.append(script_id)
+        self.conn.execute(
+            f"UPDATE scripts SET {', '.join(sets)} WHERE script_id=?", params
+        )
+
+    # ---- Pivot.6: clips for generation run ----
+
+    def clips_for_generation_run(self) -> list[sqlite3.Row]:
+        """Clips queued for AI video generation: ai_generated kind with a script_id."""
+        return self.conn.execute(
+            "SELECT * FROM clips WHERE content_kind='ai_generated' AND script_id IS NOT NULL "
+            "ORDER BY created_at ASC, clip_id ASC"
+        ).fetchall()
+
+    def get_clip_with_script(self, clip_id: str) -> sqlite3.Row | None:
+        """Joined clips + scripts row for the AI generation pipeline.
+
+        Scripts columns are prefixed with `s_` to avoid collision with clips
+        columns that share names (title, status, created_at).
+        Returns None if the clip doesn't exist or has no linked script.
+        """
+        return self.conn.execute(
+            """
+            SELECT
+                c.*,
+                s.script_id    AS s_script_id,
+                s.title        AS s_title,
+                s.narration    AS s_narration,
+                s.shots_json   AS s_shots_json,
+                s.style_suffix AS s_style_suffix,
+                s.category     AS s_category,
+                s.status       AS s_status
+            FROM clips c
+            JOIN scripts s ON s.script_id = c.script_id
+            WHERE c.clip_id = ?
+            """,
+            (clip_id,),
+        ).fetchone()
+
     # ---- retention delete helpers ----
 
     def delete_dup_hashes_before(self, cutoff_iso: str) -> int:

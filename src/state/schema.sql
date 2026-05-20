@@ -25,22 +25,25 @@ CREATE INDEX IF NOT EXISTS idx_videos_keyword ON videos(keyword);
 
 CREATE TABLE IF NOT EXISTS clips (
     clip_id            TEXT PRIMARY KEY,             -- {video_id}_{start_s}_{end_s}
-    video_id           TEXT NOT NULL REFERENCES videos(video_id),
+    video_id           TEXT REFERENCES videos(video_id),  -- nullable: ai_generated clips have no source video
     start_s            REAL NOT NULL,
     end_s              REAL NOT NULL,
     hook               TEXT NOT NULL,
     suggested_title    TEXT NOT NULL,
     title_slug         TEXT,
-    selection_method   TEXT NOT NULL,                -- heatmap_aided|transcript_only
+    selection_method   TEXT NOT NULL,                -- heatmap_aided|transcript_only|ai_generated
     publish_at_utc     TEXT,                         -- ISO 8601 UTC; filled by slot_planner
     publish_slot_local TEXT,                         -- e.g. 2026-04-25 09:00 (canonical TZ)
     output_path        TEXT,                         -- path under output/pending or output/approved
     youtube_video_id   TEXT,
+    content_kind       TEXT NOT NULL DEFAULT 'sourced',  -- sourced|ai_generated
+    script_id          TEXT,                         -- FK to scripts.script_id (ai_generated clips only)
     status             TEXT NOT NULL,                -- selected|policy_pass|rejected_policy|rendered|rejected_render|quality_pass|rejected_quality|approved|uploaded
                                                      -- Phase 4 transitions: policy_pass -> rendered (file lives at output_path; title_slug filled)
                                                      --                  -> rejected_render (irrecoverable: source mp4 missing/unreadable)
                                                      -- Phase 4.5 transitions: selected -> policy_pass | rejected_policy (post-select gate; clip-window text)
                                                      --                    rendered -> quality_pass | rejected_quality (post-render screen; rejected file moved to output/rejected/)
+                                                     -- Pivot.6 additions: ai_generated clips arrive at 'selected' via scripter
     rejection_reason   TEXT,
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
@@ -74,8 +77,9 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS quota_usage (
     date               TEXT NOT NULL,                -- YYYY-MM-DD in UTC
-    endpoint           TEXT NOT NULL,                -- search.list|videos.list|videos.insert
+    endpoint           TEXT NOT NULL,                -- search.list|videos.list|videos.insert|openrouter
     units              INTEGER NOT NULL,
+    provider           TEXT NOT NULL DEFAULT 'youtube',  -- youtube|openrouter
     recorded_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_quota_date ON quota_usage(date);
@@ -105,3 +109,65 @@ CREATE TABLE IF NOT EXISTS discovery_attempts (
     last_inspected     INTEGER NOT NULL,
     last_inserted      INTEGER NOT NULL
 );
+
+-- ============================================================
+-- Pivot.6: automated topic-to-script pipeline tables
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS topics (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    url                TEXT NOT NULL,
+    title              TEXT NOT NULL,
+    summary            TEXT,
+    source_feed        TEXT NOT NULL,
+    fetched_at         TEXT NOT NULL,               -- ISO Z
+    published_at       TEXT,                        -- ISO Z; from RSS pubDate; falls back to fetched_at
+    status             TEXT NOT NULL DEFAULT 'unscripted',  -- unscripted|scored|scripted|expired
+    topic_score_json   TEXT,                        -- {novelty, specificity, tension, weighted_score, reason}
+    weighted_score     REAL,                        -- denormalised for sorting
+    category           TEXT                         -- one of scripter.categories
+);
+CREATE INDEX IF NOT EXISTS idx_topics_status     ON topics(status);
+CREATE INDEX IF NOT EXISTS idx_topics_fetched_at ON topics(fetched_at);
+
+CREATE TABLE IF NOT EXISTS seen_topics (
+    url_hash           TEXT PRIMARY KEY,            -- SHA-256 hex of normalised URL
+    title_normalized   TEXT NOT NULL,               -- lowercase + punct-stripped + stopword-removed
+    first_seen_at      TEXT NOT NULL                -- ISO Z
+);
+
+CREATE TABLE IF NOT EXISTS scripts (
+    script_id          TEXT PRIMARY KEY,
+    topic_id           INTEGER NOT NULL REFERENCES topics(id),
+    title              TEXT NOT NULL,
+    narration          TEXT NOT NULL,
+    shots_json         TEXT NOT NULL,               -- JSON array of {index, prompt, duration_s}
+    style_suffix       TEXT NOT NULL,
+    ollama_model       TEXT NOT NULL,
+    topic_score_json   TEXT,                        -- copy from topics.topic_score_json at generation time
+    category           TEXT,
+    quality_score_json TEXT,                        -- {hook_execution, pacing, payoff, reason}
+    quality_score      REAL,                        -- denormalised weighted score for sorting
+    rejection_reason   TEXT,
+    created_at         TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'pending'  -- pending|scripted|rejected_policy|selected_for_render|failed
+);
+CREATE INDEX IF NOT EXISTS idx_scripts_status   ON scripts(status);
+CREATE INDEX IF NOT EXISTS idx_scripts_topic_id ON scripts(topic_id);
+
+CREATE TABLE IF NOT EXISTS generation_jobs (
+    job_id             TEXT PRIMARY KEY,
+    script_id          TEXT NOT NULL REFERENCES scripts(script_id),
+    shot_index         INTEGER NOT NULL,
+    provider           TEXT NOT NULL,               -- openrouter_kling etc.
+    prompt             TEXT NOT NULL,
+    duration_s         INTEGER NOT NULL,
+    status             TEXT NOT NULL,               -- pending|submitted|succeeded|failed
+    external_id        TEXT,
+    output_path        TEXT,
+    cost_cents         INTEGER,
+    submitted_at       TEXT,
+    completed_at       TEXT,
+    error              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_script_id ON generation_jobs(script_id);
