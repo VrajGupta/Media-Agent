@@ -96,6 +96,14 @@ def test_submit_uses_bearer_auth(client):
     assert headers["Authorization"] == "Bearer sk-or-test-key"
 
 
+def test_submit_disables_audio(client):
+    mock_resp = _mock_response({"id": "x", "status": "pending"})
+    with patch.object(client._session, "post", return_value=mock_resp) as mock_post:
+        client.submit("prompt")
+    body = mock_post.call_args[1]["json"]
+    assert body["enable_audio"] is False
+
+
 def test_submit_raises_if_no_id(client):
     mock_resp = _mock_response({"status": "pending"})  # missing "id"
     with patch.object(client._session, "post", return_value=mock_resp):

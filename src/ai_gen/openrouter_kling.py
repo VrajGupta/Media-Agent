@@ -78,6 +78,7 @@ class OpenRouterKlingClient(Provider):
             "prompt": prompt,
             "duration": duration_s,
             "aspect_ratio": aspect_ratio,
+            "enable_audio": False,
         }
         response = self._post_with_retry("/videos", body)
         job_id = response.get("id")
