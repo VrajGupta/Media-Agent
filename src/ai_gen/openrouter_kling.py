@@ -94,7 +94,8 @@ class OpenRouterKlingClient(Provider):
     def download(self, url: str, dest: Path) -> Path:
         """Stream download video to dest path. Returns dest."""
         dest.parent.mkdir(parents=True, exist_ok=True)
-        resp = self._session.get(url, stream=True, timeout=120)
+        headers = self._headers() if "openrouter.ai" in url else {}
+        resp = self._session.get(url, headers=headers, stream=True, timeout=120)
         resp.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=1 << 20):

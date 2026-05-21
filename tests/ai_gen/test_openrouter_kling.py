@@ -198,6 +198,29 @@ def test_download_writes_bytes_to_dest(tmp_path, client):
     assert dest.read_bytes() == fake_bytes
 
 
+def test_download_sends_auth_for_openrouter_urls(tmp_path, client):
+    fake_bytes = b"data"
+    mock_resp = MagicMock()
+    mock_resp.iter_content.return_value = [fake_bytes]
+    mock_resp.raise_for_status = MagicMock()
+    with patch.object(client._session, "get", return_value=mock_resp) as mock_get:
+        client.download("https://openrouter.ai/api/v1/videos/abc/content?index=0", tmp_path / "shot.mp4")
+    headers = mock_get.call_args[1]["headers"]
+    assert "Authorization" in headers
+    assert headers["Authorization"] == "Bearer sk-or-test-key"
+
+
+def test_download_no_auth_for_cdn_urls(tmp_path, client):
+    fake_bytes = b"data"
+    mock_resp = MagicMock()
+    mock_resp.iter_content.return_value = [fake_bytes]
+    mock_resp.raise_for_status = MagicMock()
+    with patch.object(client._session, "get", return_value=mock_resp) as mock_get:
+        client.download("https://cdn.example.com/video.mp4", tmp_path / "shot.mp4")
+    headers = mock_get.call_args[1]["headers"]
+    assert "Authorization" not in headers
+
+
 def test_download_creates_parent_dirs(tmp_path, client):
     fake_bytes = b"data"
     mock_resp = MagicMock()
