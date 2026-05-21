@@ -1,0 +1,22 @@
+{
+    "title": "Google Just Open-Sourced Its Secret Weapon",
+    "narration": "Google just dropped Gemma 3, its most capable open-source model yet. It runs on a single GPU, beats GPT-4o on key benchmarks, and anyone can download it right now. The era of local AI just got a serious upgrade.",
+    "shots": [
+        {
+            "prompt": "Google DeepMind logo on a sleek dark surface, soft studio light reflecting off polished metal",
+            "duration_s": 5
+        },
+        {
+            "prompt": "A neural network visualization with glowing connections, data flowing between nodes, deep blue tones",
+            "duration_s": 5
+        },
+        {
+            "prompt": "A developer's hands typing on a laptop, terminal window open, code running in real-time",
+            "duration_s": 5
+        },
+        {
+            "prompt": "Abstract benchmark chart bars rising sharply, clean white background, minimalist infographic style",
+            "duration_s": 5
+        }
+    ]
+}
