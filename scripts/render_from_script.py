@@ -1,7 +1,7 @@
-"""Slice 4 tracer bullet — hand-script -> one watchable MP4.
+"""Slice 4/5 tracer bullet — hand-script -> one watchable MP4 with subtitles.
 
 Takes a hand-written {title, narration, shots[]} JSON and wires:
-  ai_gen (OpenRouter Kling) -> narration (Edge TTS) -> assembler (ffmpeg)
+  ai_gen (OpenRouter Kling) -> narration (Edge TTS) -> Whisper align -> line ASS -> assembler (ffmpeg)
 
 Usage:
     python scripts/render_from_script.py --script scripts/sample_script.json
@@ -45,10 +45,12 @@ load_dotenv(ROOT / ".env")
 from src.ai_gen.openrouter_kling import OpenRouterKlingClient
 from src.ai_gen.runner import generate_shots
 from src.assembler.build import build_assembler_argv, write_concat_list
-from src.editor.ffmpeg_runner import FfmpegResult, run_ffmpeg
+from src.editor.ffmpeg_runner import run_ffmpeg
 from src.editor.music import SUPPORTED_EXTENSIONS
 from src.editor.slug import title_slug
+from src.narration.aligner import align
 from src.narration.synth import synthesize
+from src.subtitles.line_ass import write_line_ass_file
 
 STYLE_SUFFIX = (
     "clean editorial product photography, soft studio lighting, "
@@ -59,6 +61,7 @@ STYLE_SUFFIX = (
 PENDING_DIR = ROOT / "output" / "pending"
 SHOTS_DIR = ROOT / "data" / "ai_gen_shots" / "render_tracer"
 NARRATION_DIR = ROOT / "data" / "narration"
+SUBS_DIR = ROOT / "data" / "subtitles"
 MUSIC_DIR = ROOT / "data" / "music"
 
 
@@ -137,6 +140,7 @@ def main() -> None:
 
     SHOTS_DIR.mkdir(parents=True, exist_ok=True)
     NARRATION_DIR.mkdir(parents=True, exist_ok=True)
+    SUBS_DIR.mkdir(parents=True, exist_ok=True)
     PENDING_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"\n=== render_from_script.py ===")
@@ -146,10 +150,12 @@ def main() -> None:
     print(f"dry-run  : {args.dry_run}")
     print()
 
+    ass_path = SUBS_DIR / f"{clip_id}_subs.ass"
+
     # ------------------------------------------------------------------
     # Stage 1 — Generate shots
     # ------------------------------------------------------------------
-    print("[1/3] Generating shots...")
+    print("[1/4] Generating shots...")
 
     if args.dry_run:
         shot_paths: list[Path] = []
@@ -170,7 +176,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Stage 2 — Synthesize narration
     # ------------------------------------------------------------------
-    print("\n[2/3] Synthesizing narration...")
+    print("\n[2/4] Synthesizing narration...")
 
     narration_mp3 = NARRATION_DIR / f"{clip_id}_narration.mp3"
 
@@ -183,9 +189,23 @@ def main() -> None:
         print(f"  synthesized: {narration_mp3.name} ({size_kb} KB)")
 
     # ------------------------------------------------------------------
-    # Stage 3 — Assemble
+    # Stage 3 — Align narration + write subtitles
     # ------------------------------------------------------------------
-    print("\n[3/3] Assembling...")
+    print("\n[3/4] Aligning narration + generating subtitles...")
+
+    if args.dry_run:
+        write_line_ass_file(ass_path, [])
+        print(f"  [dry-run] placeholder ASS: {ass_path.name}")
+    else:
+        print("  running Whisper forced-align (large-v3, CUDA)...")
+        word_timings = align(narration_mp3)
+        write_line_ass_file(ass_path, word_timings)
+        print(f"  subtitles: {ass_path.name} ({len(word_timings)} words)")
+
+    # ------------------------------------------------------------------
+    # Stage 4 — Assemble
+    # ------------------------------------------------------------------
+    print("\n[4/4] Assembling...")
 
     output_path = PENDING_DIR / f"__unscheduled__{clip_id}__{slug}.mp4"
     music_path = _pick_music()
@@ -214,6 +234,7 @@ def main() -> None:
             tmp_output,
             total_duration_s=float(total_duration_s),
             music_path=music_path,
+            ass_path=ass_path,
         )
 
         result = run_ffmpeg(argv, tmp_output)

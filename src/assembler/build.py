@@ -43,6 +43,7 @@ def build_assembler_argv(
     total_duration_s: float,
     *,
     music_path: Path | None = None,
+    ass_path: Path | None = None,
     music_volume_db: float = -15.0,
     loudness_target_lufs: float = -14.0,
     nvenc_preset: str = "p5",
@@ -57,6 +58,7 @@ def build_assembler_argv(
         music_enabled=music_enabled,
         music_volume_db=music_volume_db,
         loudness_target_lufs=loudness_target_lufs,
+        ass_path=ass_path,
     )
 
     argv: list[str] = [
@@ -92,15 +94,29 @@ def build_assembler_argv(
     return argv
 
 
+def _escape_ass_path(path: Path) -> str:
+    """Escape a path for use in the libass filter argument (same rules as editor)."""
+    s = str(path)
+    s = s.replace("\\", "\\\\")
+    s = s.replace(":", "\\:")
+    s = s.replace(",", "\\,")
+    s = s.replace("'", "\\'")
+    return f"'{s}'"
+
+
 def _build_filtergraph(
     *,
     total_duration_s: float,
     music_enabled: bool,
     music_volume_db: float,
     loudness_target_lufs: float,
+    ass_path: Path | None = None,
 ) -> str:
-    # Video: shots are already 1080x1920; just lock fps.
-    video_chain = "[0:v]fps=30[v_out]"
+    # Video: shots are already 1080x1920; lock fps, optionally burn subtitles.
+    if ass_path is not None:
+        video_chain = f"[0:v]fps=30,ass={_escape_ass_path(ass_path)}[v_out]"
+    else:
+        video_chain = "[0:v]fps=30[v_out]"
 
     # Narration audio chain: loudnorm -> resample.
     narration_filters = (

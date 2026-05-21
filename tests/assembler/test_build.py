@@ -216,3 +216,37 @@ def test_build_argv_with_music_has_amix_in_filtergraph(tmp_path):
     fg_idx = argv.index("-filter_complex")
     filtergraph = argv[fg_idx + 1]
     assert "amix" in filtergraph
+
+
+# ---------------------------------------------------------------------------
+# Subtitle burn-in (ass_path)
+# ---------------------------------------------------------------------------
+
+
+def test_build_argv_with_ass_path_has_ass_filter(tmp_path):
+    shots = _shot_paths(2, tmp_path)
+    concat_list = tmp_path / "list.txt"
+    write_concat_list(shots, concat_list)
+    narration = tmp_path / "narration.mp3"; narration.write_bytes(b"fake")
+    ass = tmp_path / "subs.ass"; ass.write_text("[Script Info]\n", encoding="utf-8")
+    output = tmp_path / "out.mp4"
+
+    argv = build_assembler_argv(concat_list, narration, output, total_duration_s=10.0, ass_path=ass)
+
+    fg_idx = argv.index("-filter_complex")
+    filtergraph = argv[fg_idx + 1]
+    assert "ass=" in filtergraph
+
+
+def test_build_argv_without_ass_path_no_ass_filter(tmp_path):
+    shots = _shot_paths(2, tmp_path)
+    concat_list = tmp_path / "list.txt"
+    write_concat_list(shots, concat_list)
+    narration = tmp_path / "narration.mp3"; narration.write_bytes(b"fake")
+    output = tmp_path / "out.mp4"
+
+    argv = build_assembler_argv(concat_list, narration, output, total_duration_s=10.0)
+
+    fg_idx = argv.index("-filter_complex")
+    filtergraph = argv[fg_idx + 1]
+    assert "ass=" not in filtergraph
