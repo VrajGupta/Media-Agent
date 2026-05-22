@@ -860,12 +860,19 @@ Zero banlist or profanity triggers.
 - [ ] `tests/test_gen_run.py` — happy path, dry-run, run-lock contention, stage failure short-circuit
 - [ ] **Acceptance:** `python -m src.gen_run --dry-run --clips 1` walks full pipeline, no DB writes. Real `--clips 3` produces 3 clips in `output/pending/` from real RSS-fed topics.
 
-#### Slice 9 — Compliance refit (AI disclosure) · AFK · blocked by Slice 3
-- [ ] `uploader/templater.py` — branch on `content_kind='ai_generated'`: drop source/channel attribution, add "Made with AI. For entertainment / educational use." footer + topic hashtag
-- [ ] `uploader/insert_body.py` — research `altered_content` / `madeWithAi` v3 API field, set when exposed, document manual Studio attestation fallback otherwise
-- [ ] `quota_ledger/ledger.py` — `provider` dimension through `record()` / `check_or_raise()`; daily OpenRouter spend ceiling
-- [ ] `tests/uploader/test_ai_disclosure.py` — dry-run JSON contains AI footer, source/channel absent, disclosure flag set
-- [ ] **Acceptance:** Dry-run uploader JSON shows correct AI-gen description, no source/channel field, AI disclosure flag set (or fallback documented).
+#### Slice 9 — Compliance refit (AI disclosure) · AFK · COMPLETE (2026-05-22)
+- [x] `uploader/templater.py` — `build_description_ai` + `build_tags_ai` (pure, parallel to sourced-clip helpers)
+- [x] `uploader/insert_body.py` — `status.containsSyntheticMedia=true` when `content_kind='ai_generated' AND compliance.ai_disclosure`; dispatches to AI-gen templater helpers; accepts optional `script_row` + `cfg`
+- [x] `state/repository.py` — `get_script(script_id)` DAL helper; `get_clip_with_video` changed to LEFT JOIN (supports nullable video_id for AI-gen clips)
+- [x] `uploader/runner.py` — `_resolve_recheck_inputs` extracted helper (AI-gen: uses scripts.narration; sourced: loads transcript); `upload_one_clip` fetches `script_row` for AI-gen and passes to body builder + recheck
+- [x] `tests/conftest.py` — `StubConfig._Compliance` inner class + `compliance.ai_disclosure` param
+- [x] `tests/test_uploader_templater_ai.py` — 7 unit tests for `build_description_ai` + `build_tags_ai`
+- [x] `tests/test_uploader_insert_body_ai.py` — 5 unit tests for body builder dispatch + gate
+- [x] `tests/test_uploader_runner_recheck.py` — 4 unit tests for `_resolve_recheck_inputs`
+- [x] `tests/test_uploader_runner.py` — 3 AI-gen dry-run integration tests (acceptance criterion)
+- [x] `tests/test_repository_pivot6.py` — 2 unit tests for `get_script`
+- [x] Doc rename: `altered_content`/`madeWithAi` → `containsSyntheticMedia` in CLAUDE.md, agents.md, skills.md, plan.md, progress.md; Studio-fallback hedges removed
+- [x] **Acceptance:** Dry-run uploader JSON for AI-gen clip shows `status.containsSyntheticMedia=true`, "Made with AI." footer, no "Source:" / "Original channel:", category-seeded tags ✓
 
 #### Slice 10 — First live AI-generated upload · HITL · blocked by Slices 8, 9
 - [ ] User drags one Slice 8 output from `output/pending/` → `output/approved/`

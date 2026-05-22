@@ -312,7 +312,7 @@ class Repository:
                 v.channel   AS v_channel,
                 v.keyword   AS v_keyword
             FROM clips c
-            JOIN videos v ON v.video_id = c.video_id
+            LEFT JOIN videos v ON v.video_id = c.video_id
             WHERE c.clip_id = ?
             """,
             (clip_id,),
@@ -676,6 +676,11 @@ class Repository:
              style_suffix, ollama_model, created_at,
              topic_score_json, category),
         )
+
+    def get_script(self, script_id: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM scripts WHERE script_id=?", (script_id,)
+        ).fetchone()
 
     def update_script_status(
         self,

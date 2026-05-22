@@ -101,7 +101,7 @@ Retired because: no source video to slice. Code + ~55 tests deleted.
 **Unchanged:** orphan-marker fence, pre-upload re-check, quota guard, dry-run mode, `publish_at_utc` padding (20 min lead), resumable upload with tenacity.
 **Changed for Pivot.6 (`content_kind='ai_generated'`):**
 - `templater.py` — description drops `Source: url` + `Original channel: name`; replaces with `compliance.description_footer` ("Made with AI. For entertainment / educational use.") + topic hashtag. Tags from `upload_extra_tags` config key.
-- `insert_body.py` — `altered_content` / `madeWithAi` flag set when `compliance.ai_disclosure=true`. (Exact v3 API field name to be confirmed at Slice 9 — manual Studio attestation if not yet exposed.)
+- `insert_body.py` — `status.containsSyntheticMedia=true` set when `content_kind='ai_generated'` and `compliance.ai_disclosure=true`. Field confirmed live in YouTube Data API v3 since 2024-10-30.
 - `runner.py` — `get_clip_with_video` join becomes LEFT JOIN; templater receives `content_kind` for routing.
 
 ## 🔧 `quota_ledger/` — Per-Endpoint Quota Tracker (provider dimension added Pivot.6)

@@ -437,6 +437,106 @@ def test_dry_run_policy_rejection_emits_no_json(tmp_path, monkeypatch):
     assert row["status"] == "quality_pass"
 
 
+# ---- Slice 9: AI-gen dry-run integration -------------------------------------
+
+
+def _setup_ai_gen(tmp_path, *, publish_at_utc=None):
+    """Set up an ai_generated clip with a linked script row for dry-run tests."""
+    cfg = StubConfig(tmp_path)
+    db = Path(cfg.paths.state_db)
+    conn = connect(db)
+    initialize_schema(conn)
+    repo = Repository(conn)
+
+    # Insert a topic + script row.
+    topic_id = repo.insert_topic(
+        url="https://example.com/gpt5",
+        title="GPT-5 Released",
+        source_feed="https://feeds.example.com",
+        fetched_at="2026-05-22T10:00:00Z",
+    )
+    repo.insert_script(
+        script_id="sc-ai-test",
+        topic_id=topic_id,
+        title="GPT-5 Is Here",
+        narration="OpenAI just dropped GPT-5 and it hits different.",
+        shots_json='[]',
+        style_suffix="clean editorial",
+        ollama_model="qwen2.5:3b-instruct",
+        created_at="2026-05-22T10:00:00Z",
+        category="ai-models",
+    )
+
+    # Insert the ai_generated clip row directly (upsert_selector_clip sets sourced).
+    publish_at = publish_at_utc or (
+        (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    pending_path = Path(cfg.paths.pending_dir) / "ai-clip-1.mp4"
+    pending_path.write_bytes(b"\x00" * 4096)
+    conn.execute("""
+        INSERT INTO clips (
+            clip_id, video_id, start_s, end_s, hook, suggested_title,
+            selection_method, status, content_kind, script_id,
+            output_path, publish_at_utc
+        ) VALUES (
+            'ai-clip-1', NULL, 0.0, 16.0, 'GPT-5 is here', 'GPT-5 Analysis',
+            'ai_generated', 'quality_pass', 'ai_generated', 'sc-ai-test',
+            :output_path, :publish_at
+        )
+    """, {"output_path": str(pending_path), "publish_at": publish_at})
+    conn.commit()
+
+    return cfg, repo
+
+
+def test_ai_gen_dry_run_writes_disclosure_flag(tmp_path, monkeypatch):
+    cfg, repo = _setup_ai_gen(tmp_path)
+    _patch_evaluate(monkeypatch, _passing_verdict())
+
+    res = upload_one_clip(
+        repo=repo, cfg=cfg, ledger=_ledger(repo), youtube=None,
+        clip_id="ai-clip-1", dry_run=True,
+        now_utc=datetime.now(timezone.utc),
+    )
+
+    assert res.outcome == UploadOutcome.dry_run
+    dry_run_path = Path(cfg.paths.dry_run_dir) / "ai-clip-1.json"
+    assert dry_run_path.exists()
+    body = json.loads(dry_run_path.read_text())
+    assert body["status"]["containsSyntheticMedia"] is True
+
+
+def test_ai_gen_dry_run_description_has_footer_not_source(tmp_path, monkeypatch):
+    cfg, repo = _setup_ai_gen(tmp_path)
+    _patch_evaluate(monkeypatch, _passing_verdict())
+
+    upload_one_clip(
+        repo=repo, cfg=cfg, ledger=_ledger(repo), youtube=None,
+        clip_id="ai-clip-1", dry_run=True,
+        now_utc=datetime.now(timezone.utc),
+    )
+
+    body = json.loads((Path(cfg.paths.dry_run_dir) / "ai-clip-1.json").read_text())
+    desc = body["snippet"]["description"]
+    assert "Made with AI. For entertainment / educational use." in desc
+    assert "Source:" not in desc
+    assert "Original channel:" not in desc
+
+
+def test_ai_gen_dry_run_tags_seeded_from_category(tmp_path, monkeypatch):
+    cfg, repo = _setup_ai_gen(tmp_path)
+    _patch_evaluate(monkeypatch, _passing_verdict())
+
+    upload_one_clip(
+        repo=repo, cfg=cfg, ledger=_ledger(repo), youtube=None,
+        clip_id="ai-clip-1", dry_run=True,
+        now_utc=datetime.now(timezone.utc),
+    )
+
+    body = json.loads((Path(cfg.paths.dry_run_dir) / "ai-clip-1.json").read_text())
+    assert body["snippet"]["tags"][0] == "aimodels"
+
+
 # ---- run_all + reconcile gate ------------------------------------------------
 
 

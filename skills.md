@@ -26,7 +26,7 @@
 - **`yt-dlp`** (Python API) — was used for YouTube source-video downloads and caption sidecar retrieval (Phases 1–7, Pivots.0–5). Retained in `requirements.txt` but no code path calls it in Pivot.6. Will be removed when the `discovery/` and `downloader/` modules are fully deleted.
 
 ## Upload
-- **YouTube Data API v3** via **`google-api-python-client`** — used for `videos.insert` (resumable upload) with `publishAt` + `altered_content` flag. `search.list` and `videos.list` no longer called (discovery retired in Pivot.6).
+- **YouTube Data API v3** via **`google-api-python-client`** — used for `videos.insert` (resumable upload) with `publishAt` + `status.containsSyntheticMedia` disclosure flag. `search.list` and `videos.list` no longer called (discovery retired in Pivot.6).
 - **`google-auth-oauthlib`** — handles OAuth desktop flow; refresh-token cached at `data/oauth_token.json`.
 - **`requests`** — HTTP client for Ollama API calls and (previously) `mostReplayed` heatmap endpoint.
 

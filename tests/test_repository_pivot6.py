@@ -411,3 +411,39 @@ def test_legacy_sourced_clip_insert_body_unchanged():
     assert set(body.keys()) == {"snippet", "status"}
     assert body["status"]["privacyStatus"] == "private"
     assert body["status"]["selfDeclaredMadeForKids"] is False
+
+
+# ---------------------------------------------------------------------------
+# DAL helpers: get_script (Slice 9)
+# ---------------------------------------------------------------------------
+
+
+def _insert_topic_and_script(repo) -> str:
+    topic_id = repo.insert_topic(
+        url="https://example.com/gs", title="T", source_feed="F",
+        fetched_at="2026-05-22T10:00:00Z",
+    )
+    repo.insert_script(
+        script_id="gs-script-1",
+        topic_id=topic_id,
+        title="GPT-5 Is Here",
+        narration="AI is wild right now.",
+        shots_json='[]',
+        style_suffix="clean editorial",
+        ollama_model="qwen2.5:3b-instruct",
+        created_at="2026-05-22T10:00:00Z",
+        category="ai-models",
+    )
+    return "gs-script-1"
+
+
+def test_get_script_returns_row_for_known_id(repo):
+    script_id = _insert_topic_and_script(repo)
+    row = repo.get_script(script_id)
+    assert row is not None
+    assert row["script_id"] == script_id
+    assert row["narration"] == "AI is wild right now."
+
+
+def test_get_script_returns_none_for_unknown_id(repo):
+    assert repo.get_script("nonexistent-id") is None

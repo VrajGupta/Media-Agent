@@ -20,7 +20,7 @@
 
 **Budget:** $5/week → 2–3 clips/week (scale up when growth validates the format).
 
-**AI disclosure:** locked on (`compliance.ai_disclosure=true`). Description footer + `altered_content` flag on `videos.insert`.
+**AI disclosure:** locked on (`compliance.ai_disclosure=true`). Description footer + `status.containsSyntheticMedia=true` on `videos.insert` for all `ai_generated` clips.
 
 **Human review:** locked on for first 2 weeks. Filesystem-based — user drags `output/pending/*.mp4` → `output/approved/`.
 

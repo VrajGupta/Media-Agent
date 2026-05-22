@@ -19,13 +19,14 @@ configurable by accepting a list from cfg.upload_extra_tags when present.
 from __future__ import annotations
 
 import re
-from typing import Mapping, Sequence
+from typing import Sequence
 
 
 # YouTube hard limits.
 _TITLE_MAX = 100
 _TAGS_TOTAL_MAX = 500          # combined character budget across all tags
 _SHORTS_SUFFIX = " #Shorts"
+_AI_FOOTER = "Made with AI. For entertainment / educational use."
 
 
 def _slug_keyword(keyword: str) -> str:
@@ -132,6 +133,83 @@ def build_tags(
     used = 0
     for tag in deduped:
         # +1 for the implicit separator after the first tag.
+        cost = len(tag) + (1 if fitted else 0)
+        if used + cost > budget:
+            break
+        fitted.append(tag)
+        used += cost
+    return fitted
+
+
+# ---------------------------------------------------------------------------
+# AI-generated content variants (Pivot.6 / content_kind='ai_generated')
+# ---------------------------------------------------------------------------
+
+def build_description_ai(
+    *,
+    hook: str,
+    suggested_title: str = "",
+    category: str | None = None,
+) -> str:
+    """Build the AI-gen upload description.
+
+    Format:
+        {hook}
+
+        Made with AI. For entertainment / educational use.
+
+        #Shorts #{category_slug}
+
+    Falls back to suggested_title slug when category is absent.
+    Both empty → bare "#Shorts" line only.
+    No Source: / Original channel: block.
+    """
+    primary = (hook or "").strip() or (suggested_title or "").strip()
+    slug = _slug_keyword(category) if category else _slug_keyword(suggested_title)
+
+    parts = []
+    if primary:
+        parts.append(primary)
+        parts.append("")
+    parts.append(_AI_FOOTER)
+    parts.append("")
+    tags_line = "#Shorts"
+    if slug:
+        tags_line = f"#Shorts #{slug}"
+    parts.append(tags_line)
+    return "\n".join(parts)
+
+
+def build_tags_ai(
+    *,
+    category: str | None = None,
+    suggested_title: str = "",
+    extra_tags: Sequence[str] | None = None,
+) -> list[str]:
+    """Build the tags list for AI-gen clips.
+
+    Seeded from category slug (fallback: suggested_title slug), plus the
+    static set ['shorts', 'viral']. Same 500-char budget rule as build_tags.
+    """
+    slug = _slug_keyword(category) if category else _slug_keyword(suggested_title)
+    seed: list[str] = []
+    if slug:
+        seed.append(slug)
+    seed.extend(["shorts", "viral"])
+    if extra_tags:
+        seed.extend(t.strip().lower() for t in extra_tags if t and t.strip())
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for tag in seed:
+        if tag and tag not in seen:
+            seen.add(tag)
+            deduped.append(tag)
+
+    budget = _TAGS_TOTAL_MAX
+    fitted: list[str] = []
+    used = 0
+    for tag in deduped:
         cost = len(tag) + (1 if fitted else 0)
         if used + cost > budget:
             break

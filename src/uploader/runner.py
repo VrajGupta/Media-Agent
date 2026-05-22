@@ -129,6 +129,37 @@ def _load_transcript_words(transcripts_dir: Path, video_id: str) -> Optional[lis
     return words
 
 
+def _resolve_recheck_inputs(
+    *,
+    clip_row: Any,
+    script_row: Optional[Any],
+    transcripts_dir: Path,
+) -> Optional[tuple[str, str]]:
+    """Return (clip_text, recheck_title) for the policy re-check, or None.
+
+    AI-gen: reads narration + title directly from script_row; no filesystem.
+    Sourced: loads Whisper transcript JSON; returns None if missing/unreadable.
+    """
+    try:
+        content_kind = clip_row["content_kind"] or "sourced"
+    except (KeyError, IndexError):
+        content_kind = "sourced"
+    if content_kind == "ai_generated" and script_row is not None:
+        return (script_row["narration"], script_row["title"])
+
+    # Sourced path: load transcript from disk.
+    video_id = clip_row["video_id"]
+    all_words = _load_transcript_words(transcripts_dir, video_id or "")
+    if all_words is None:
+        return None
+    start_s = float(clip_row["start_s"])
+    end_s = float(clip_row["end_s"])
+    window_words = words_in_clip_window(all_words, start_s, end_s)
+    clip_text = clip_text_from_words(window_words)
+    recheck_title = (clip_row["hook"] or clip_row["suggested_title"] or "").strip()
+    return (clip_text, recheck_title)
+
+
 def _atomic_write_json(target: Path, payload: dict) -> None:
     """tmp + os.replace atomic write of `payload` to `target`."""
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -257,22 +288,25 @@ def upload_one_clip(
     )
     padded_iso = publish_at_mod.format_publish_at_iso_z(padded)
 
+    # ---- Step 5.5: Fetch script_row for AI-gen clips ---------------------
+    content_kind = row["content_kind"] if row["content_kind"] else "sourced"
+    script_row: Optional[Any] = None
+    if content_kind == "ai_generated":
+        script_row = repo.get_script(row["script_id"])
+
     # ---- Step 6: Pre-upload policy re-check -------------------------------
     transcripts_dir = cfg.abs_path(cfg.paths.transcripts_dir)
-    all_words = _load_transcript_words(transcripts_dir, row["video_id"])
-    if all_words is None:
+    recheck_result = _resolve_recheck_inputs(
+        clip_row=row,
+        script_row=script_row,
+        transcripts_dir=transcripts_dir,
+    )
+    if recheck_result is None:
         return UploadResult(
             clip_id, UploadOutcome.error_no_transcript,
             reason="transcript missing or unreadable",
         )
-
-    start_s = float(row["start_s"])
-    end_s = float(row["end_s"])
-    window_words = words_in_clip_window(all_words, start_s, end_s)
-    clip_text = clip_text_from_words(window_words)
-
-    # Title input matches what build_title will use (hook OR suggested_title).
-    recheck_title = (row["hook"] or row["suggested_title"] or "").strip()
+    clip_text, recheck_title = recheck_result
 
     verdict: PolicyVerdict = evaluate_clip_policy(
         cfg, clip_text, recheck_title, ollama_host=ollama_host,
@@ -314,6 +348,8 @@ def upload_one_clip(
         clip_row=joined_row,
         video_row=joined_row,    # joined row carries v_* aliases
         padded_publish_at_utc=padded,
+        script_row=script_row,
+        cfg=cfg,
     )
 
     # ---- Step 8: Dry-run branch ------------------------------------------

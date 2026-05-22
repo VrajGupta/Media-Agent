@@ -66,6 +66,10 @@ class StubConfig:
             self.quota_usage = quota_usage
             self.vacuum_every_days = vacuum_every_days
 
+    class _Compliance:
+        def __init__(self, *, ai_disclosure: bool = True):
+            self.ai_disclosure = ai_disclosure
+
     class _Paths:
         def __init__(self, raw_dir: str, logs_dir: str, state_db: str,
                      transcripts_dir: str = "", pending_dir: str = "",
@@ -123,6 +127,8 @@ class StubConfig:
         dedup_lookback_days: int = 90,
         phash_min_hamming: int = 8,
         ollama_model: str = "qwen2.5:3b-instruct",
+        # Compliance (Slice 9)
+        ai_disclosure: bool = True,
         # Phase 5 — uploader knobs.
         videos_insert_unit_cost: int = 1600,
         youtube_quota_ceiling_units: int = 9000,
@@ -174,6 +180,7 @@ class StubConfig:
         ]
         self.timezone = timezone
         self.human_review = human_review
+        self.compliance = self._Compliance(ai_disclosure=ai_disclosure)
         self.retention = self._Retention()
         from pathlib import Path
         self.project_root = Path(tmp_path)

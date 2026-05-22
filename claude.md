@@ -20,7 +20,7 @@ A fire-and-forget Python agent that automates an **AI-generated Tech/AI news You
 - **Mode:** fully autonomous in steady state. `human_review=true` is locked on for the first 2 weeks (filesystem-based; user drags approved clips from `output/pending/` → `output/approved/`).
 - **Operational model (Path B — hybrid, unchanged from v1):**
   - **Weekly heavy run** — `gen_run.py` (replaces `weekly_run.py`) triggered by Windows Task Scheduler once a week. Topics → scripts → generates → narrates → assembles → screens → slots → retains, assigning each clip a `publish_at` timestamp spread across the next 7 days.
-  - **Daily upload run** — `daily_upload.py` triggered by Windows Task Scheduler once a day, ~5 min. Uploads that day's clips to YouTube with `privacyStatus=private` + `publishAt=<slot>` + altered-content flag, letting YouTube auto-publish at the slot.
+  - **Daily upload run** — `daily_upload.py` triggered by Windows Task Scheduler once a day, ~5 min. Uploads that day's clips to YouTube with `privacyStatus=private` + `publishAt=<slot>` + `containsSyntheticMedia` disclosure flag, letting YouTube auto-publish at the slot.
   - This split exists because YouTube's default API quota allows only ~6 inserts/day. Quota-increase audit is a future task; once approved, the daily run collapses into the weekly run.
 - **Development & runtime:** the user's Windows laptop (single machine). Code is developed and run on the same PC; no separate dev/runtime environments.
 
@@ -47,7 +47,7 @@ Python 3.11+ · ffmpeg+NVENC · **OpenRouter Kling 3.0 std** (paid; provider-abs
    └─ daily_upload.py:
         clips with publish_at_utc ∈ today and content_kind='ai_generated'
                 → policy_gate (re-check on script.narration)
-                → uploader (videos.insert + publishAt + altered_content flag, orphan-marker fence, --dry-run aware) → YouTube
+                → uploader (videos.insert + publishAt + containsSyntheticMedia flag, orphan-marker fence, --dry-run aware) → YouTube
                                   ↑
                           state.db (SQLite — clips.content_kind branches uploader templating)
                                   ↑
@@ -89,7 +89,7 @@ Each stage is independent and idempotent, communicating via the SQLite state sto
   - Daily uploader pulls from `output/approved/` while review is on; from `output/pending/` directly after week 2.
 - **Canonical timezone:** `Asia/Singapore`.
 - **No Discord, no webhooks.** Failures and recoveries append to `logs/alerts.md`.
-- **AI disclosure:** `compliance.ai_disclosure=true` in config. Upload description footer: "Made with AI. For entertainment / educational use." YouTube `altered_content` flag set on `videos.insert` where the v3 API exposes it; manual Studio attestation as fallback if the API field is not yet exposed.
+- **AI disclosure:** `compliance.ai_disclosure=true` in config. Upload description footer: "Made with AI. For entertainment / educational use." YouTube `status.containsSyntheticMedia=true` set on `videos.insert` for all `content_kind='ai_generated'` clips (field confirmed live in v3 since 2024-10-30).
 
 ## Hardware (locked)
 - Windows PC: i9-11900H, 32 GB DDR4, 1 TB SSD, RTX 3070 laptop GPU (8 GB VRAM).
@@ -111,5 +111,5 @@ AI-generated content eliminates the movie-clip copyright-strike risk. Residual r
 - **OpenRouter Kling cost overrun.** Mitigated by `per_clip_cost_cents_max` and `daily_spend_cents_ceiling` enforced in `quota_ledger`. Agent aborts if projection exceeds ceiling.
 - **Generator aesthetic drift.** Slice 2 spike validates 10 sample shots before committing. Provider abstraction allows a half-day swap to Seedance / Pika / MiniMax if output quality is insufficient.
 - **Edge TTS throttling.** Microsoft rate-limits the free endpoint unannounced. Tenacity retry + `pyttsx3` offline fallback as degraded mode.
-- **YouTube AI-disclosure API gaps.** YouTube's `altered_content` UI toggle (required March 2024+) may not be fully exposed in the v3 insert API. Research at Slice 9; manual Studio attestation as fallback.
+- **YouTube AI-disclosure API gaps.** Resolved in Slice 9: `status.containsSyntheticMedia` (boolean) is confirmed live in v3 since 2024-10-30. Set on all `content_kind='ai_generated'` uploads. Spot-check Studio UI for first ~5 uploads to verify.
 - **RSS feed quality.** Bad feed selections → boring or off-niche topics. Mitigated by user-curated feed list (delivered at Slice 7) and the policy_gate's topic_filter check.
