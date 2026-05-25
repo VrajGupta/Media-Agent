@@ -104,6 +104,34 @@ User drags one Slice 8 output from `output/pending/` to `output/approved/`. Runs
 
 ---
 
+### Slice 11 — Steady-state publish cadence (Tue/Thu) · AFK · blocked by 8
+
+User wants steady-state publishing on **Tuesdays and Thursdays only**. The current `slot_planner` allocates over consecutive days with no weekday filter, so this isn't expressible today. Add an `upload_weekdays` allowlist to config and a one-line weekday skip in the allocator grid loop; default to all 7 days for backward compatibility. Tune clips-per-publishing-day to the budget (~1/day → 2/week). Not on the Slice 10 critical path — the first live clip is decoupled to a near-term slot for mechanics validation.
+
+**Acceptance:** With `upload_weekdays: [tue, thu]`, a weekly `slot_planner` run assigns `publish_at_utc` only to Tuesdays and Thursdays at the configured `upload_slots` times.
+
+---
+
+## Pivot.7 — Hybrid real-image + AI-transition Shorts (active)
+
+> Locked in a design dialogue on 2026-05-25. Full spec: `docs/prds/pivot-7-hybrid-real-image-shorts.md`. Decomposed into Issues 15–21 (`docs/issues/`).
+
+**Why:** the all-Kling Pivot.6 output reads as AI slop, renders recognizable entities (RTX 5090, OpenAI logo) as fakes, and the Edge voice sounds robotic.
+
+**The change:** each clip becomes a **hybrid** — `real_image` shots (real sourced photos of recognizable entities, via hybrid licensed→web sourcing + Ken Burns motion) mixed with `ai_video` shots (Kling, kept only as connective/atmosphere transitions). The Scripter tags each of 4 shots. Narration moves to local **Kokoro** (Edge fallback). ~2 Kling shots/clip → **~half the Kling cost**. AI disclosure stays on.
+
+- **P7.1 / Issue 15 — Tagged shot schema** · AFK · no blockers. Scripter emits `real_image`/`ai_video` shots; pure `normalize_shots`; back-compat for legacy string shots.
+- **P7.2 / Issue 16 — Kokoro narration engine** · Interactive · no blockers. Kokoro-82M local behind `synthesize(...)`, Edge fallback, `bootstrap --check` for `espeak-ng`.
+- **P7.3 / Issue 17 — `image_fetch` hybrid sourcing** · AFK · no blockers. `Source` ABC + Wikimedia/Openverse/logo/web(ddgs); cache + license audit; validation.
+- **P7.4 / Issue 18 — Ken Burns builder** · AFK · blocked by 17. Still → `shot_XX.mp4` (blurred-bg 9:16 fill + zoompan), pure argv builder.
+- **P7.5 / Issue 19 — Hybrid assembler** · AFK · blocked by 15, 17, 18. Kind-aware routing in `_generate_clip` + optional `xfade` crossfades; cost counts ai_video only.
+- **P7.6 / Issue 20 — End-to-end hybrid spike** · Interactive · blocked by 15–19. One real topic → mixed clip → eyeball + cost reconciliation + HITL sign-off.
+- **P7.7 / Issue 21 — Config/retention/compliance/docs cleanup** · AFK · blocked by 20. Re-tighten cost ceilings; image-cache TTL; confirm disclosure; update docs.
+
+**Acceptance (Pivot.7):** one hybrid Short with real entity images + AI transitions (no synthetic person), natural Kokoro voice, per-clip Kling cost ≈ half the 4-shot baseline, AI disclosure intact, docs updated to the hybrid model.
+
+---
+
 ## Out of scope for Pivot.6
 
 - TikTok / Instagram cross-posting (still YouTube-only)

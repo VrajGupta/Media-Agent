@@ -351,6 +351,7 @@ def run_all(
         days_per_run=int(cfg.days_per_run),
         clips_per_day=int(cfg.clips_per_day),
         timezone_name=cfg.timezone,
+        allowed_weekdays=cfg.upload_weekdays,
     )
 
     by_clip_id = {a.clip_id: a for a in assignments}

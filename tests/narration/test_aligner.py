@@ -88,3 +88,24 @@ def test_align_strips_leading_whitespace_from_words(tmp_path):
 
     assert result[0]["word"] == "Hello"
     assert result[1]["word"] == "world"
+
+
+def test_align_falls_back_to_cpu_when_cuda_load_fails(tmp_path):
+    audio = tmp_path / "narration.mp3"
+    audio.write_bytes(b"fake")
+
+    cpu_model = _make_model([[("Hello", 0.0, 0.4)]])
+    calls: list[dict] = []
+
+    def _whisper_model(model_size, device, compute_type):
+        calls.append({"device": device, "compute_type": compute_type})
+        if device == "cuda":
+            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        return cpu_model
+
+    with patch("src.narration.aligner.WhisperModel", side_effect=_whisper_model):
+        result = align(audio)
+
+    assert result == [{"word": "Hello", "start": 0.0, "end": 0.4}]
+    assert [c["device"] for c in calls] == ["cuda", "cpu"]
+    assert calls[1]["compute_type"] == "int8"

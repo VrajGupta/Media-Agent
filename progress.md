@@ -788,6 +788,8 @@ Zero banlist or profanity triggers.
 
 > See `plan.md` for the readable narrative of each slice. This section is the per-task checklist.
 
+> **Tracker vs reality (noted 2026-05-24):** Slices 2–4 were executed as a combined *spike-to-first-ship* — artifacts exist on disk (`src/assembler/build.py`, `scripts/render_from_script.py`, `scripts/migrate_pivot_6_3.py` applied, spike shots under `data/ai_gen_shots/`) — but their boxes track the *fully-automated-pipeline* acceptance, which isn't done. Slice 10 (first live ship) is being completed via a **manual hand-stitch ahead of Slice 8 (`gen_run.py`)**, deliberately: de-risk the irreversible compliance/CID/cost mechanics on one clip before building the orchestrator. The "blocked by Slice 8" label reflects the *automated* path, not this manual first ship.
+
 #### Slice 1 — Niche + direction lock (docs only) · HITL · no blockers
 - [x] Rewrite `plan.md` — inline 10-slice tracker, drop broken `.claude/plans/...` reference (2026-05-18)
 - [x] Rewrite `CLAUDE.md` — niche corrected to Tech/AI news, provider to OpenRouter Kling 3.0, style to clean editorial, narration to `+10%/0Hz`, broken plan refs removed (2026-05-18)
@@ -875,9 +877,102 @@ Zero banlist or profanity triggers.
 - [x] **Acceptance:** Dry-run uploader JSON for AI-gen clip shows `status.containsSyntheticMedia=true`, "Made with AI." footer, no "Source:" / "Original channel:", category-seeded tags ✓
 
 #### Slice 10 — First live AI-generated upload · HITL · blocked by Slices 8, 9
-- [ ] User drags one Slice 8 output from `output/pending/` → `output/approved/`
-- [ ] `python -m src.daily_upload` (real, not dry-run) → 1 Short uploaded
-- [ ] User verifies AI disclosure visible in YouTube Studio
-- [ ] Compare `quota_usage(provider='openrouter')` total against OpenRouter dashboard
-- [ ] Monitor 48 h: `logs/alerts.md` clean, no Content ID flag, cost within ±5%
-- [ ] **Acceptance:** 1 AI-generated Short live on test channel. AI disclosure visible. No Content ID flag. Cost recorded within ±5% of OpenRouter dashboard.
+
+**Operational plan locked in /grill-with-docs (2026-05-23).** Pre-flight, ship gate, and stability gate split into two phases so later slices aren't blocked for 48 h.
+
+**Refined in /grill-with-docs (2026-05-24):** bar = **mechanics-validation ship** (test channel; "compliant + not embarrassing", not portfolio quality). Lead frame = **shot 3** (clinician + scan). Cost baseline corrected to **315¢** (5 real renders; the shot-0 re-roll was billed). Hand-stitch **reuses existing shots** via a new `--reuse-shots/--order` flag — no regeneration. First ship **decoupled** from the new Tue/Thu cadence and validated **today** with a near-term slot. Migration already applied. Glossary written to `CONTEXT/CONTEXT.md`.
+
+**Pre-flight (unblock + assembly):**
+- [x] ~~Apply `scripts/migrate_pivot_6_3.py`~~ — **already applied** (verified 2026-05-24: `clips.content_kind`, `clips.script_id`, `quota_usage.provider` present; `topics`/`scripts`/`generation_jobs` tables exist in live `data/state.db`). This pre-flight step was stale; no action needed.
+- [x] Sanitize narration: `clean_mojibake()` wired in `render_from_script.py` (Issue 10 — `src/scripter/sanitize.py` + 5 tests green).
+- [x] **`render_from_script.py --reuse-shots/--order` flag implemented** (Issue 11 code — `/tdd` 2026-05-24: 8 tests green in `test_render_from_script_reuse.py` + `test_insert_ai_gen_clip.py`). Dry-run verified on candidate with order `[3,2,1,0]`, no OpenRouter call.
+- [x] **Execute assembly on GPU machine** — completed 2026-05-24. Whisper fell back to CPU (`cublas64_12.dll` missing); NVENC encode succeeded.
+  - MP4: `output/pending/__unscheduled__1c1e8ae6-2b9e-56c8-952e-b95217019317__corti_s_symphony_beats_openai_in_medical_speech_recognition_1994.mp4`
+  - Duration: ~16.7 s · Resolution: 720×1280 (native spike shot size)
+  - `clips` row inserted: `clip_id=1c1e8ae6-2b9e-56c8-952e-b95217019317`, `status=quality_pass`, `content_kind=ai_generated`
+- [x] Insert `clips` row via `scripts/insert_ai_gen_clip.py` — done 2026-05-24 (`publish_at_utc` still NULL; set via slot_planner or manual before upload)
+- [x] `python -m src.uploader --dry-run` → JSON reviewed 2026-05-24: `containsSyntheticMedia=true`, AI footer, `madeForKids=false`, no source/channel fields ✓
+
+**Ship gate (T+1h after live run):**
+- [x] MP4 moved to `output/approved/` (2026-05-24).
+- [x] OAuth re-authed (revoked token replaced); `python -m src.daily_upload` live run succeeded.
+- [x] Upload success — `youtube_video_id=9lpL8kuLX08`, `publish_at_utc=2026-05-24T14:41:32Z`. https://www.youtube.com/watch?v=9lpL8kuLX08
+- [x] Cost reconciliation (DB): **315¢** succeeded jobs ✓
+- [x] API spot-check (2026-05-24): `privacyStatus=private`, `publishAt` set, `madeForKids=false`, description AI footer present
+- [ ] Studio **Altered content** toggle (API `containsSyntheticMedia` not in `videos.list` response — verify UI)
+- [ ] Video **public** after `publishAt` (~22:41 SGT)
+- [ ] No Content ID claim (Studio Copyright tab)
+- [ ] OpenRouter dashboard ≈ 315¢ ±5%
+- [ ] Mark `[~]` ship-verified after above pass
+
+**Stability gate (T+48h):**
+- [ ] `logs/alerts.md` clean for 48 h (no delayed CID, no policy flag, no community-guidelines issue).
+- [ ] Video still public (not auto-removed by YouTube).
+- [ ] Analytics: impressions > 0 (algo at least serving it).
+- [ ] Mark `[x]` in this file — Slice 10 complete.
+
+**Acceptance:** 1 AI-generated Short live on test channel. AI disclosure visible in Studio. No Content ID flag. Cost recorded within ±5% of OpenRouter dashboard.
+
+**Failure handling:** `api_rejected` = hard ship-block, investigate `result.reason` (likely Slice 9 templater bug). Other failures (`api_unreachable`, `lock_held`, `upload_quota_exceeded`) recoverable in <24h.
+
+#### Slice 11 — Steady-state publish cadence: Tuesdays & Thursdays · AFK · `[~]` code complete
+> Requested in /grill-with-docs (2026-05-24). Issue 14 shipped via `/tdd` 2026-05-24.
+- [x] `config.yaml` — `upload_weekdays: ["tue", "thu"]`; `clips_per_day: 1` (2 clips/week budget).
+- [x] `src/config_loader/weekdays.py` + `loader.py` — typed `upload_weekdays` field; short/full names + ints; empty/omitted ⇒ all 7 days.
+- [x] `src/slot_planner/allocator.py` — `allowed_weekdays` param; grid loop skips disallowed days.
+- [x] `src/slot_planner/runner.py` — passes `cfg.upload_weekdays` into allocator.
+- [x] `tests/test_upload_weekdays.py` (6) + allocator weekday cases (4) + runner wire-through (1) — all green.
+- [ ] **Live verify:** weekly `slot_planner` run with 2+ unslotted clips assigns only Tue/Thu slots (blocked on Slice 8 orchestrator for unattended path; manual `slot_planner` CLI works today).
+
+## Pivot.7 — Hybrid real-image + AI-transition Shorts — IN PROGRESS
+
+> Locked 2026-05-25 (design dialogue). PRD: `docs/prds/pivot-7-hybrid-real-image-shorts.md`. Issues 15–21 in `docs/issues/`.
+> Each clip = `real_image` shots (real sourced photos + Ken Burns) mixed with `ai_video` Kling transition shots. Scripter tags each of 4 shots. Narration → local Kokoro (Edge fallback). ~2 Kling shots/clip → ~half cost. AI disclosure stays on.
+
+### P7.1 — Tagged shot schema (Issue 15) · AFK · no blockers
+- [x] `make_script_generator` prompt emits 4 tagged shots: `real_image`(+entity) / `ai_video`(+prompt); living-person entities disallowed for `real_image`.
+- [x] Pure `normalize_shots(raw_shots)` — bare string → ai_video; validates required keys; unknown kind raises.
+- [x] `validate_script` extended (still exactly 4 shots; narration word-count unchanged).
+- [x] `AiGenConfig` relaxes shot-count (clip may carry 1–3 ai_video shots).
+- [x] ≥8 tests (coercion, validation, unknown-kind, legacy back-compat). Suite green.
+
+### P7.2 — Kokoro narration engine (Issue 16) · Interactive · no blockers
+- [x] `KokoroEngine` behind `synthesize(...)`; `narration.engine ∈ {kokoro,edge}`; `kokoro_voice`.
+- [x] Automatic Edge fallback on Kokoro failure (+ degraded-mode warning).
+- [x] `bootstrap --check` verifies Kokoro + `espeak-ng`.
+- [x] ≥5 tests (engine routing, fallback, config validation). Operator listen-test confirms natural voice + alignment.
+
+### P7.3 — `image_fetch` hybrid sourcing (Issue 17) · AFK · no blockers
+- [x] `Source` ABC + Logo/Wikimedia/Openverse/WebSearch(ddgs, SerpAPI optional).
+- [x] `fetch_image(entity, query, cfg, *, cache_dir) -> ImageAsset`; licensed-first, web fallback only on miss.
+- [x] Cache by `sha256(entity|query)` (hit = no HTTP); provenance sidecar (source/license/url).
+- [x] Validation (content-type, decodable, min resolution); living-person rejected; no-result raises typed error.
+- [x] `ImageFetchConfig` + `Paths.images_dir` + image-cache TTL.
+- [x] ≥10 tests, HTTP fully mocked. Suite green.
+
+### P7.4 — Ken Burns builder (Issue 18) · AFK · blocked by 17
+- [x] Pure `build_ken_burns_argv(...)` — blurred-bg 9:16 fill (aspect-preserved fg) + zoompan; NVENC; Kling-shape parity.
+- [x] Atomic write via `run_ffmpeg` (in `_render_real_image_shot`).
+- [x] ≥5 argv-shape tests (no ffmpeg run). Suite green.
+
+### P7.5 — Hybrid assembler routing + crossfades (Issue 19) · AFK · blocked by 15, 17, 18
+- [x] `_generate_clip` routes ai_video→Kling, real_image→fetch+Ken Burns (order preserved; only ai_video billed).
+- [x] `build_assembler_argv` crossfade path (`xfade`, default 0.25s); disabled path byte-identical to current concat-demuxer (regression).
+- [x] `fetch_image` failure → clip skipped, batch continues; cost projection counts ai_video only.
+- [x] `assembler.crossfade_enabled` / `crossfade_duration_s` config.
+- [x] ≥6 tests (routing, crossfade argv, regression, failure skip, cost). Mocks for generate_shots/fetch_image/run_ffmpeg. Suite green.
+
+### P7.6 — End-to-end hybrid spike (Issue 20) · Interactive · blocked by 15–19
+- [x] `scripts/spike_hybrid.py` (throwaway): one real topic → tagged shots → route → Kokoro → align → subs → hybrid assemble → `output/pending/`.
+- [ ] Cost recorded to `quota_usage(provider='openrouter')`; ≈ half the 4-shot baseline; reconciled ±10% vs OpenRouter dashboard.
+- [ ] Provenance report per real_image shot (source/license/url).
+- [ ] **HITL sign-off:** real images correct + on-topic, AI shots read as transitions (no synthetic person), Kokoro natural, crossfades smooth.
+
+### P7.7 — Config/retention/compliance/docs cleanup (Issue 21) · AFK · blocked by 20
+- [x] Lower `per_clip_cost_cents_max` to ~2-shot baseline; re-confirm `daily_spend_cents_ceiling`.
+- [ ] Dry-run uploader still shows `containsSyntheticMedia=true` + "Made with AI." footer.
+- [x] `data/images/` cache TTL in `retention.run_all`.
+- [~] Update `CLAUDE.md`/`agents.md`/`skills.md`/`CONTEXT/` to hybrid model; glossary adds `real_image`/`ai_video` shot kinds + extended living-person rule (`CONTEXT/` done; main docs pending spike sign-off).
+- [x] Config + retention tests green.
+
+**Acceptance (Pivot.7):** one hybrid Short — real entity images + AI transitions (no synthetic person), natural Kokoro voice, per-clip Kling cost ≈ half the 4-shot baseline, AI disclosure intact, docs updated.

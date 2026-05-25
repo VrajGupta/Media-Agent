@@ -34,7 +34,7 @@ OUT_DIR = Path("data/ai_gen_shots/spike_2026-05-21")
 REPORT_PATH = Path("logs/spike_report_2026-05-21.md")
 ALERTS_PATH = Path("logs/alerts.md")
 DURATION_S = 4
-COST_HALT_CENTS = 50  # auto-halt if Stage 1 costs more than $0.50
+COST_HALT_CENTS = 100  # auto-halt if Stage 1 costs more than $1.00
 
 # Target script IDs from the 2026-05-20 production run
 PRIMARY_IDS = [
@@ -409,7 +409,10 @@ def main() -> None:
     h5_pass = True
 
     # ── Stage 3 ────────────────────────────────────────────────────────────────
-    if script_b is None:
+    if True:  # SPIKE: skipping Stage 3 to stay within $5 weekly budget ($0.63/shot real cost)
+        print("\n[SKIP] Stage 3 skipped — real unit cost ($0.63/shot) pushes 8-shot run over $5 budget.")
+        print("       Re-enable once budget model is confirmed for the month.")
+    if False and script_b is None:
         print("\n[WARN] No second script available — skipping Stage 3.")
     else:
         shots_b: list[str] = json.loads(script_b["shots_json"])

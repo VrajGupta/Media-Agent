@@ -31,8 +31,13 @@ PyJWT>=2.8.0
 # RSS topic ingest (Pivot.6)
 feedparser>=6.0.0
 
-# Narration (Pivot.6)
+# Narration (Pivot.6 Edge; Pivot.7 Kokoro primary)
 edge-tts>=6.1.9
+kokoro>=0.9.0
+soundfile>=0.12.1
+
+# Image sourcing (Pivot.7)
+ddgs>=9.0.0
 
 # dev / testing
 pytest>=8.0.0

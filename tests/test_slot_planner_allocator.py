@@ -241,3 +241,76 @@ def test_dst_fall_back_uses_first_instance_via_zoneinfo():
     a = assignments[0]
     assert a.slot_utc_dt.hour == 0
     assert a.slot_utc_dt.minute == 30
+
+
+def test_allowed_weekdays_restricts_to_tue_thu():
+    """7-day window from Sunday assigns only on the next Tuesday and Thursday."""
+    sunday_0200 = _sgt(2026, 5, 3, 2, 0)
+    assignments, overflow = allocate_slots(
+        clip_ids=["c1", "c2"],
+        now_local=sunday_0200,
+        upload_slots=["09:00"],
+        days_per_run=7,
+        clips_per_day=1,
+        timezone_name="Asia/Singapore",
+        allowed_weekdays=frozenset({1, 3}),
+    )
+    assert overflow == []
+    assert len(assignments) == 2
+    assert assignments[0].slot_local_dt.weekday() == 1
+    assert assignments[0].slot_local_dt.day == 5
+    assert assignments[1].slot_local_dt.weekday() == 3
+    assert assignments[1].slot_local_dt.day == 7
+
+
+def test_allowed_weekdays_none_matches_full_week_behavior():
+    sunday_0200 = _sgt(2026, 5, 3, 2, 0)
+    args = dict(
+        clip_ids=["c1"],
+        now_local=sunday_0200,
+        upload_slots=["09:00"],
+        days_per_run=7,
+        clips_per_day=1,
+        timezone_name="Asia/Singapore",
+    )
+    default_assignments, default_overflow = allocate_slots(**args)
+    explicit_assignments, explicit_overflow = allocate_slots(
+        **args,
+        allowed_weekdays=frozenset(range(7)),
+    )
+    assert default_assignments == explicit_assignments
+    assert default_overflow == explicit_overflow
+
+
+def test_allowed_weekdays_with_no_eligible_days_overflows_all_clips():
+    """Only Monday allowed, but the 1-day window is a Tuesday."""
+    tuesday_0200 = _sgt(2026, 5, 5, 2, 0)
+    assignments, overflow = allocate_slots(
+        clip_ids=["c1", "c2"],
+        now_local=tuesday_0200,
+        upload_slots=["09:00"],
+        days_per_run=1,
+        clips_per_day=1,
+        timezone_name="Asia/Singapore",
+        allowed_weekdays=frozenset({0}),
+    )
+    assert assignments == []
+    assert overflow == ["c1", "c2"]
+
+
+def test_allowed_weekdays_respects_min_lead_on_target_weekday():
+    """Tuesday 08:50 — today's 09:00 slot is inside the 20-min lead; next is Thursday."""
+    tuesday_0850 = _sgt(2026, 5, 5, 8, 50)
+    assignments, overflow = allocate_slots(
+        clip_ids=["c1"],
+        now_local=tuesday_0850,
+        upload_slots=["09:00"],
+        days_per_run=7,
+        clips_per_day=1,
+        timezone_name="Asia/Singapore",
+        allowed_weekdays=frozenset({1, 3}),
+    )
+    assert overflow == []
+    assert len(assignments) == 1
+    assert assignments[0].slot_local_dt.weekday() == 3
+    assert assignments[0].slot_local_dt.day == 7

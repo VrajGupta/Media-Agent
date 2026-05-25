@@ -30,9 +30,16 @@ class _AiGenStub:
 
 
 class _NarrationStub:
+    engine = "edge"
+    kokoro_voice = "am_michael"
     voice = "en-US-GuyNeural"
     rate = "+10%"
     pitch = "+0Hz"
+
+
+class _AssemblerStub:
+    crossfade_enabled = False
+    crossfade_duration_s = 0.25
 
 
 class _ScripterStub:
@@ -47,6 +54,14 @@ class _ScripterStub:
     retry_on_failure = 1
 
 
+class _ImageFetchStub:
+    sources = ["logo", "wikimedia", "openverse", "web"]
+    min_resolution = 512
+    max_candidates_per_source = 5
+    web_fallback_enabled = True
+    living_person_patterns = ["portrait of", "photo of"]
+
+
 class _Paths:
     def __init__(self, tmp_path):
         logs = Path(tmp_path) / "logs"
@@ -55,6 +70,7 @@ class _Paths:
         self.state_db = str(Path(tmp_path) / "state.db")
         self.pending_dir = str(Path(tmp_path) / "output" / "pending")
         self.rejected_dir = str(Path(tmp_path) / "output" / "rejected")
+        self.images_dir = str(Path(tmp_path) / "data" / "images")
 
 
 class _GenStubConfig:
@@ -63,16 +79,39 @@ class _GenStubConfig:
         self.paths = _Paths(tmp_path)
         self.ai_gen = _AiGenStub()
         self.narration = _NarrationStub()
+        self.assembler = _AssemblerStub()
+        self.image_fetch = _ImageFetchStub()
         self.scripter = _ScripterStub()
         self.clips_per_day = 2
         self.days_per_run = 7
         self.upload_slots = ["09:00", "17:00"]
         self.timezone = "Asia/Singapore"
         self.human_review = True
+        self.output_resolution = [1080, 1920]
+        self.nvenc_preset = "p5"
+        self.nvenc_cq = 23
+        self.loudness_target_lufs = -14.0
+        self.music_volume_db = -15.0
+        self.blurred_bg_sigma = 20
+        self.ken_burns_zoom_rate = 0.0015
 
     def abs_path(self, rel: str) -> Path:
         p = Path(rel)
         return p if p.is_absolute() else (self.project_root / p)
+
+
+def _hybrid_script(script_id: str, title: str) -> dict:
+    return {
+        "script_id": script_id,
+        "title": title,
+        "narration": "n" * 35,
+        "shots": [
+            {"kind": "real_image", "entity": "OpenAI logo", "duration_s": 4},
+            {"kind": "ai_video", "prompt": "abstract data flow", "duration_s": 4},
+            {"kind": "real_image", "entity": "RTX 5090", "duration_s": 4},
+            {"kind": "ai_video", "prompt": "server room lights", "duration_s": 4},
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +217,12 @@ def test_generate_shots_called_once_per_script(tmp_path):
     cfg = _GenStubConfig(tmp_path)
 
     fake_scripts = [
-        {"script_id": "aaa", "title": "T1", "narration": "n1", "shots": [{"prompt": "p", "duration_s": 5}]},
-        {"script_id": "bbb", "title": "T2", "narration": "n2", "shots": [{"prompt": "q", "duration_s": 5}]},
+        _hybrid_script("aaa", "T1"),
+        _hybrid_script("bbb", "T2"),
     ]
+
+    fake_shot = Path(tmp_path) / "shot_00.mp4"
+    fake_shot.write_bytes(b"fake")
 
     with patch("src.gen_run.fetch_unscripted_topics", return_value=[]), \
          patch("src.gen_run.run_stage_a", return_value=[]), \
@@ -190,7 +232,9 @@ def test_generate_shots_called_once_per_script(tmp_path):
          patch("src.quality_screen.run_all", return_value=[]), \
          patch("src.slot_planner.run_all", return_value=[]), \
          patch("src.retention.run_all", return_value=MagicMock()), \
-         patch("src.gen_run.generate_shots", return_value=[]) as p_gen, \
+         patch("src.gen_run.fetch_image") as p_fetch, \
+         patch("src.gen_run._render_real_image_shot", return_value=fake_shot), \
+         patch("src.gen_run.generate_shots", return_value=[fake_shot]) as p_gen, \
          patch("src.gen_run.synthesize") as p_synth, \
          patch("src.gen_run.align", return_value=[]) as p_align, \
          patch("src.gen_run.write_line_ass_file") as p_ass, \
@@ -200,6 +244,7 @@ def test_generate_shots_called_once_per_script(tmp_path):
                        openrouter_api_key="sk-test")
 
     assert p_gen.call_count == 2
+    assert p_fetch.call_count == 0
 
 
 def test_dry_run_skips_generate_shots_and_synthesize(tmp_path):
@@ -210,7 +255,7 @@ def test_dry_run_skips_generate_shots_and_synthesize(tmp_path):
     cfg = _GenStubConfig(tmp_path)
 
     fake_scripts = [
-        {"script_id": "aaa", "title": "T1", "narration": "n1", "shots": [{"prompt": "p", "duration_s": 5}]},
+        _hybrid_script("aaa", "T1"),
     ]
 
     with patch("src.gen_run.fetch_unscripted_topics", return_value=[]), \

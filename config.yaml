@@ -1,9 +1,10 @@
 # Media Agent — Runtime Configuration
 
 # --- Cadence ---
-clips_per_day: 4
+clips_per_day: 1
 days_per_run: 7
 upload_slots: ["09:00", "13:00", "17:00", "21:00"]   # canonical timezone (below)
+upload_weekdays: ["tue", "thu"]                       # Slice 11: 2 clips/week steady-state
 
 # --- Time ---
 timezone: "Asia/Singapore"
@@ -110,8 +111,26 @@ videos_list_unit_cost: 1
 # Top up OPENROUTER_API_KEY before running ai_gen slice.
 ai_gen:
   model: "kwaivgi/kling-v3.0-std"
-  per_clip_cost_cents_max: 350        # $3.50 per clip ceiling (~38% headroom over real $2.52 cost)
-  daily_spend_cents_ceiling: 500      # $5.00/day ceiling (one week's budget as panic-stop)
+  per_clip_cost_cents_max: 100        # ~2 Kling shots/clip (~$0.67) + headroom
+  daily_spend_cents_ceiling: 500      # $5.00/day ceiling
+
+narration:
+  engine: kokoro
+  kokoro_voice: am_michael
+  voice: en-US-GuyNeural
+  rate: "+10%"
+  pitch: "0Hz"
+
+assembler:
+  crossfade_enabled: true
+  crossfade_duration_s: 0.25
+
+image_fetch:
+  sources: [logo, wikimedia, openverse, web]
+  min_resolution: 512
+  web_fallback_enabled: true
+
+ken_burns_zoom_rate: 0.0015
 
 # --- Topic ingest (RSS) ---
 topic_ingest:
@@ -133,6 +152,7 @@ retention:
   dup_hashes: 90
   quota_usage: 90
   vacuum_every_days: 30
+  images: 30
 
 # --- Paths (rarely changed) ---
 paths:
@@ -145,6 +165,7 @@ paths:
   dry_run_dir: "output/dry_run"
   orphans_dir: "output/orphans"                       # Phase 5 orphan-marker fence; cleaned up on happy path
   music_dir: "data/music"                             # Pivot.3 — drop trendy tracks here (mp3/m4a/wav/flac/ogg)
+  images_dir: "data/images"                           # Pivot.7 — cached real_image assets
   logs_dir: "logs"
   oauth_token: "data/oauth_token.json"
   client_secrets: "data/client_secret.json"

@@ -39,11 +39,15 @@ from src import policy_gate, quality_screen, slot_planner, retention
 from src.ai_gen.openrouter_kling import OpenRouterKlingClient
 from src.ai_gen.runner import generate_shots
 from src.assembler.build import build_assembler_argv, write_concat_list
+from src.assembler.ken_burns import build_ken_burns_argv
 from src.editor.ffmpeg_runner import run_ffmpeg
 from src.editor.music import SUPPORTED_EXTENSIONS
 from src.editor.slug import title_slug
+from src.image_fetch.fetcher import fetch_image
+from src.image_fetch.errors import ImageFetchError
 from src.narration.aligner import align
 from src.narration.synth import synthesize
+from src.scripter.shots import normalize_shots
 from src.subtitles.line_ass import write_line_ass_file
 
 
@@ -76,6 +80,41 @@ def _build_runs_md_summary(summary: dict) -> str:
     return base
 
 
+def count_ai_video_shots(shots: list[dict]) -> int:
+    """Count ai_video shots for cost projection."""
+    return sum(1 for s in shots if s.get("kind") == "ai_video")
+
+
+def _render_real_image_shot(
+    shot: dict,
+    index: int,
+    shots_dir: Path,
+    cfg,
+) -> Path:
+    entity = shot["entity"]
+    query = shot.get("search_query")
+    asset = fetch_image(entity, query, cfg)
+    dest = shots_dir / f"shot_{index:02d}.mp4"
+    tmp = dest.with_suffix(".tmp.mp4")
+    argv = build_ken_burns_argv(
+        Path(asset.path),
+        tmp,
+        duration_s=float(shot.get("duration_s", 4)),
+        resolution=tuple(cfg.output_resolution),
+        zoom_rate=float(getattr(cfg, "ken_burns_zoom_rate", 0.0015)),
+        blurred_bg_sigma=int(getattr(cfg, "blurred_bg_sigma", 20)),
+        nvenc_preset=cfg.nvenc_preset,
+        nvenc_cq=int(cfg.nvenc_cq),
+    )
+    result = run_ffmpeg(argv, tmp)
+    if result.returncode != 0 or result.output_size_bytes == 0:
+        if tmp.exists():
+            tmp.unlink()
+        raise RuntimeError(f"Ken Burns render failed for shot {index}")
+    os.replace(tmp, dest)
+    return dest
+
+
 def _generate_clip(
     script: dict,
     cfg,
@@ -84,7 +123,7 @@ def _generate_clip(
     openrouter_api_key: str | None,
     dry_run: bool,
 ) -> Path | None:
-    """Run ai_gen → narration → assemble for one script. Returns output path or None."""
+    """Run hybrid shot routing → narration → assemble for one script."""
     clip_id = script.get("script_id", str(uuid.uuid4())[:8])
     title = script.get("title", "untitled")
     narration_text = script.get("narration", "")
@@ -92,11 +131,9 @@ def _generate_clip(
 
     ai_cfg = cfg.ai_gen
     narr_cfg = cfg.narration
+    asm_cfg = cfg.assembler
     style_suffix = ai_cfg.style_suffix if ai_cfg.style_suffix else ""
-    shots = [
-        {**s, "prompt": f"{s['prompt']}, {style_suffix}".strip(", ")}
-        for s in shots_raw
-    ]
+    normalized = normalize_shots(shots_raw)
 
     pending_dir = cfg.abs_path(cfg.paths.pending_dir)
     pending_dir.mkdir(parents=True, exist_ok=True)
@@ -111,31 +148,57 @@ def _generate_clip(
         logger.info("[dry-run] skipping ai_gen + narration + assemble for {}", clip_id)
         return None
 
-    # Stage: ai_gen
-    if not openrouter_api_key:
-        raise RuntimeError("OPENROUTER_API_KEY required for ai_gen")
-    client = OpenRouterKlingClient(api_key=openrouter_api_key)
-    shot_paths = generate_shots(shots, shots_dir, client,
-                                max_concurrent=ai_cfg.max_concurrent)
+    ai_shots = [
+        {
+            **s,
+            "prompt": f"{s['prompt']}, {style_suffix}".strip(", "),
+        }
+        for s in normalized
+        if s.get("kind") == "ai_video"
+    ]
+    ai_paths: list[Path] = []
+    if ai_shots:
+        if not openrouter_api_key:
+            raise RuntimeError("OPENROUTER_API_KEY required for ai_video shots")
+        client = OpenRouterKlingClient(api_key=openrouter_api_key)
+        ai_paths = generate_shots(
+            ai_shots, shots_dir, client, max_concurrent=ai_cfg.max_concurrent,
+        )
 
-    # Stage: narration synthesis
+    shot_paths: list[Path] = []
+    ai_idx = 0
+    for i, shot in enumerate(normalized):
+        if shot.get("kind") == "real_image":
+            shot_paths.append(_render_real_image_shot(shot, i, shots_dir, cfg))
+        else:
+            shot_paths.append(ai_paths[ai_idx])
+            ai_idx += 1
+
     narration_mp3 = narration_dir / f"{clip_id}_narration.mp3"
-    synthesize(narration_text, narration_mp3,
-               voice=narr_cfg.voice, rate=narr_cfg.rate, pitch=narr_cfg.pitch)
+    synthesize(
+        narration_text,
+        narration_mp3,
+        voice=narr_cfg.voice,
+        rate=narr_cfg.rate,
+        pitch=narr_cfg.pitch,
+        engine=narr_cfg.engine,
+        kokoro_voice=narr_cfg.kokoro_voice,
+    )
 
-    # Stage: alignment + subtitles
     word_timings = align(narration_mp3)
     ass_path = subs_dir / f"{clip_id}_subs.ass"
     write_line_ass_file(ass_path, word_timings)
 
-    # Stage: assemble
     with tempfile.TemporaryDirectory(prefix=f"gen_{clip_id}_build_") as tmpdir:
         concat_list = Path(tmpdir) / "concat.txt"
         write_concat_list(shot_paths, concat_list)
-        total_duration_s = sum(s.get("duration_s", 5) for s in shots)
+        durations = [float(s.get("duration_s", 4)) for s in normalized]
+        if asm_cfg.crossfade_enabled and len(shot_paths) > 1:
+            total_duration_s = sum(durations) - asm_cfg.crossfade_duration_s * (len(durations) - 1)
+        else:
+            total_duration_s = sum(durations)
         tmp_output = output_path.with_suffix(".tmp.mp4")
 
-        # Optional music
         music_dir = cfg.abs_path("data/music")
         music_path: Path | None = None
         if music_dir.exists():
@@ -146,10 +209,20 @@ def _generate_clip(
             music_path = tracks[0] if tracks else None
 
         argv = build_assembler_argv(
-            concat_list, narration_mp3, tmp_output,
+            concat_list,
+            narration_mp3,
+            tmp_output,
             total_duration_s=float(total_duration_s),
             music_path=music_path,
             ass_path=ass_path,
+            music_volume_db=float(cfg.music_volume_db),
+            loudness_target_lufs=float(cfg.loudness_target_lufs),
+            nvenc_preset=cfg.nvenc_preset,
+            nvenc_cq=int(cfg.nvenc_cq),
+            shot_paths=shot_paths if asm_cfg.crossfade_enabled else None,
+            crossfade_enabled=asm_cfg.crossfade_enabled,
+            crossfade_duration_s=float(asm_cfg.crossfade_duration_s),
+            shot_durations_s=durations,
         )
         result = run_ffmpeg(argv, tmp_output)
 
@@ -217,6 +290,11 @@ def run_generation(
                     dry_run=dry_run,
                 )
                 clips_generated += 1
+            except ImageFetchError as exc:
+                logger.error(
+                    "gen_run: image fetch failed for {}: {}",
+                    script.get("script_id"), exc,
+                )
             except Exception as exc:
                 logger.error("gen_run: clip generation failed for {}: {}", script.get("script_id"), exc)
         summary["stages"]["generate_clips"] = {"count": clips_generated}

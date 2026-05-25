@@ -48,10 +48,15 @@ def build_assembler_argv(
     loudness_target_lufs: float = -14.0,
     nvenc_preset: str = "p5",
     nvenc_cq: int = 23,
+    shot_paths: list[Path] | None = None,
+    crossfade_enabled: bool = False,
+    crossfade_duration_s: float = 0.25,
+    shot_durations_s: list[float] | None = None,
 ) -> list[str]:
-    """Return ffmpeg argv for Pivot.6 assembly. No ffmpeg is invoked here."""
+    """Return ffmpeg argv for Pivot.6/7 assembly. No ffmpeg is invoked here."""
     ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
     music_enabled = music_path is not None
+    use_crossfade = crossfade_enabled and shot_paths and len(shot_paths) > 1
 
     filtergraph = _build_filtergraph(
         total_duration_s=total_duration_s,
@@ -59,6 +64,9 @@ def build_assembler_argv(
         music_volume_db=music_volume_db,
         loudness_target_lufs=loudness_target_lufs,
         ass_path=ass_path,
+        shot_paths=shot_paths if use_crossfade else None,
+        crossfade_duration_s=crossfade_duration_s,
+        shot_durations_s=shot_durations_s,
     )
 
     argv: list[str] = [
@@ -66,16 +74,21 @@ def build_assembler_argv(
         "-y",
         "-hide_banner",
         "-loglevel", "error",
-        # Input 0: concat list of shot MP4s
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(concat_list),
-        # Input 1: narration MP3
-        "-i", str(narration_path),
     ]
 
+    if use_crossfade:
+        for shot in shot_paths:
+            argv += ["-i", str(shot)]
+    else:
+        argv += [
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_list),
+        ]
+
+    argv += ["-i", str(narration_path)]
+
     if music_enabled:
-        # Input 2: background music
         argv += ["-i", str(music_path)]
 
     argv += [
@@ -111,23 +124,32 @@ def _build_filtergraph(
     music_volume_db: float,
     loudness_target_lufs: float,
     ass_path: Path | None = None,
+    shot_paths: list[Path] | None = None,
+    crossfade_duration_s: float = 0.25,
+    shot_durations_s: list[float] | None = None,
 ) -> str:
-    # Video: shots are already 1080x1920; lock fps, optionally burn subtitles.
-    if ass_path is not None:
+    if shot_paths and len(shot_paths) > 1:
+        durations = shot_durations_s or [4.0] * len(shot_paths)
+        video_chain = _build_crossfade_video_chain(
+            len(shot_paths), durations, crossfade_duration_s, ass_path=ass_path,
+        )
+    elif ass_path is not None:
         video_chain = f"[0:v]fps=30,ass={_escape_ass_path(ass_path)}[v_out]"
     else:
         video_chain = "[0:v]fps=30[v_out]"
 
-    # Narration audio chain: loudnorm -> resample.
     narration_filters = (
         f"loudnorm=I={loudness_target_lufs:g}:LRA=11:TP=-1.0,"
         "aresample=48000"
     )
 
+    narr_input = len(shot_paths) if shot_paths else 1
+    music_input = narr_input + 1
+
     if music_enabled:
         audio_chain = (
-            f"[1:a]{narration_filters}[a_voice];"
-            f"[2:a]aloop=loop=-1:size=2147483647,"
+            f"[{narr_input}:a]{narration_filters}[a_voice];"
+            f"[{music_input}:a]aloop=loop=-1:size=2147483647,"
             f"atrim=0:{total_duration_s:.3f},"
             f"asetpts=PTS-STARTPTS,"
             f"volume={music_volume_db:g}dB,"
@@ -135,6 +157,33 @@ def _build_filtergraph(
             "[a_voice][a_music]amix=inputs=2:duration=first:normalize=0[a]"
         )
     else:
-        audio_chain = f"[1:a]{narration_filters}[a]"
+        audio_chain = f"[{narr_input}:a]{narration_filters}[a]"
 
     return f"{video_chain};{audio_chain}"
+
+
+def _build_crossfade_video_chain(
+    n_shots: int,
+    durations: list[float],
+    crossfade_s: float,
+    *,
+    ass_path: Path | None = None,
+) -> str:
+    """Build xfade chain for N shot inputs [0:v]..[N-1:v]."""
+    if n_shots < 2:
+        raise ValueError("crossfade requires at least 2 shots")
+    parts: list[str] = []
+    label_in = "[0:v]"
+    elapsed = durations[0]
+    for i in range(1, n_shots):
+        label_out = f"[vx{i}]" if i < n_shots - 1 else "[v_comp]"
+        offset = max(elapsed - crossfade_s, 0.0)
+        parts.append(
+            f"{label_in}[{i}:v]xfade=transition=fade:duration={crossfade_s:g}:offset={offset:g}{label_out}"
+        )
+        label_in = label_out
+        elapsed += durations[i] - crossfade_s
+    chain = ";".join(parts)
+    if ass_path is not None:
+        return f"{chain};[v_comp]fps=30,ass={_escape_ass_path(ass_path)}[v_out]"
+    return f"{chain};[v_comp]fps=30[v_out]"

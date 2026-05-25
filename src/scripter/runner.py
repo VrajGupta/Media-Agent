@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable
 
+from src.scripter.shots import normalize_shots
+
 
 def score_topics(topics: list[dict], scorer_fn: Callable) -> list[dict]:
     result = []
@@ -64,6 +66,10 @@ def validate_script(script: dict, cfg) -> tuple[bool, str | None]:
     shots = script.get("shots", [])
     if len(shots) != 4:
         return False, f"expected 4 shots, got {len(shots)}"
+    try:
+        normalize_shots(shots)
+    except ValueError as e:
+        return False, str(e)
     return True, None
 
 
@@ -100,6 +106,7 @@ def run_stage_b(
             continue
         try:
             script = generate_script(t, generator_fn, cfg)
+            script = {**script, "shots": normalize_shots(script["shots"])}
         except Exception:
             continue
         script_id = str(uuid.uuid4())

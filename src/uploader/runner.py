@@ -43,6 +43,9 @@ from loguru import logger
 from src.config_loader import Config
 from src.observability import append_alert
 from src.policy_gate.evaluator import PolicyVerdict, evaluate_clip_policy
+from src.policy_gate import hook_sanity as hook_mod
+from src.policy_gate import nsfw as nsfw_mod
+from src.policy_gate import topic_filter as topic_mod
 from src.quota_ledger import QuotaExceeded, QuotaLedger
 from src.state import Repository
 from src.transcripts.clip_text import clip_text_from_words, words_in_clip_window
@@ -308,8 +311,20 @@ def upload_one_clip(
         )
     clip_text, recheck_title = recheck_result
 
+    policy_kwargs: dict = {}
+    if ollama_host:
+        policy_kwargs["nsfw_fn"] = functools.partial(
+            nsfw_mod.classify_nsfw, model=cfg.ollama_model, host=ollama_host,
+        )
+        policy_kwargs["hook_fn"] = functools.partial(
+            hook_mod.rate_hook_sanity, model=cfg.ollama_model, host=ollama_host,
+        )
+        policy_kwargs["topic_fn"] = functools.partial(
+            topic_mod.classify_topic, model=cfg.ollama_model, host=ollama_host,
+        )
+
     verdict: PolicyVerdict = evaluate_clip_policy(
-        cfg, clip_text, recheck_title, ollama_host=ollama_host,
+        cfg, clip_text, recheck_title, **policy_kwargs,
     )
     if verdict.infrastructure_failed:
         logger.warning(

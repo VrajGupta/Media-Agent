@@ -7,6 +7,12 @@ Usage:
     python scripts/render_from_script.py --script scripts/sample_script.json
     python scripts/render_from_script.py --script scripts/sample_script.json --dry-run
 
+    # Slice 10 — reuse existing Kling shots (skips Stage-1 generation, no OpenRouter):
+    python scripts/render_from_script.py \\
+        --script-id 7cb41305-b39b-4cc2-855b-067e03549d25 \\
+        --reuse-shots data/ai_gen_shots/spike_2026-05-21 \\
+        --order 3,2,1,0
+
     --dry-run: skips all API calls and ffmpeg; prints what would happen.
 
 Input JSON format:
@@ -45,11 +51,13 @@ load_dotenv(ROOT / ".env")
 from src.ai_gen.openrouter_kling import OpenRouterKlingClient
 from src.ai_gen.runner import generate_shots
 from src.assembler.build import build_assembler_argv, write_concat_list
-from src.editor.ffmpeg_runner import run_ffmpeg
+from src.editor.ffmpeg_runner import ffprobe_duration_seconds, run_ffmpeg
 from src.editor.music import SUPPORTED_EXTENSIONS
 from src.editor.slug import title_slug
 from src.narration.aligner import align
 from src.narration.synth import synthesize
+from src.scripter.sanitize import clean_mojibake
+from src.state import Repository, connect
 from src.subtitles.line_ass import write_line_ass_file
 
 STYLE_SUFFIX = (
@@ -70,6 +78,40 @@ MUSIC_DIR = ROOT / "data" / "music"
 # ---------------------------------------------------------------------------
 
 
+def parse_shot_order(order_str: str, *, expected_count: int | None = None) -> list[int]:
+    """Parse a comma-separated shot index list, e.g. ``3,2,1,0``."""
+    parts = [p.strip() for p in order_str.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("order must list at least one shot index")
+    try:
+        order = [int(p) for p in parts]
+    except ValueError as exc:
+        raise ValueError(f"order must be comma-separated integers: {order_str!r}") from exc
+    if expected_count is not None and len(order) != expected_count:
+        raise ValueError(f"order must contain exactly {expected_count} indices, got {len(order)}")
+    return order
+
+
+def resolve_reused_shot_paths(
+    shots_dir: Path,
+    script_id: str,
+    order: list[int],
+) -> list[Path]:
+    """Return existing shot MP4 paths in play order. Raises if any file is missing."""
+    prefix = script_id[:8]
+    paths = [shots_dir / f"{prefix}_shot_{i}.mp4" for i in order]
+    missing = [p for p in paths if not p.exists()]
+    if missing:
+        names = ", ".join(p.name for p in missing)
+        raise FileNotFoundError(f"missing reused shot files: {names}")
+    return paths
+
+
+def stable_clip_id(script_id: str) -> str:
+    """Deterministic clip_id for idempotent re-runs from the same script."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"render:{script_id}"))
+
+
 def _load_script(path: Path) -> dict:
     raw = json.loads(path.read_text(encoding="utf-8"))
     required = {"title", "narration", "shots"}
@@ -79,6 +121,31 @@ def _load_script(path: Path) -> dict:
     if not raw["shots"]:
         raise ValueError("shots list is empty")
     return raw
+
+
+def _load_script_from_db(db_path: Path, script_id: str) -> dict:
+    conn = connect(db_path)
+    try:
+        repo = Repository(conn)
+        row = repo.get_script(script_id)
+        if row is None:
+            raise ValueError(f"script {script_id!r} not found in {db_path}")
+        return {
+            "script_id": row["script_id"],
+            "title": row["title"],
+            "narration": clean_mojibake(row["narration"]),
+            "shots": json.loads(row["shots_json"]),
+        }
+    finally:
+        conn.close()
+
+
+def _total_shot_duration(shot_paths: list[Path]) -> float:
+    total = 0.0
+    for path in shot_paths:
+        duration = ffprobe_duration_seconds(path)
+        total += duration if duration is not None else 5.0
+    return total
 
 
 def _apply_style_suffix(shots: list[dict]) -> list[dict]:
@@ -126,17 +193,43 @@ def _placeholder_mp4(path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render one AI-generated Short from a script JSON.")
-    parser.add_argument("--script", required=True, type=Path, help="Path to script JSON file")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--script", type=Path, help="Path to script JSON file")
+    src.add_argument(
+        "--script-id",
+        help="Load script row from data/state.db (requires --reuse-shots)",
+    )
+    parser.add_argument(
+        "--reuse-shots",
+        type=Path,
+        help="Directory of existing shot MP4s; skips Stage-1 Kling generation",
+    )
+    parser.add_argument(
+        "--order",
+        help="Comma-separated original shot indices in play order, e.g. 3,2,1,0",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Skip all API calls and ffmpeg")
     args = parser.parse_args()
 
-    script = _load_script(args.script)
+    if args.script_id and not args.reuse_shots:
+        parser.error("--script-id requires --reuse-shots (no regeneration)")
+    if args.reuse_shots and not args.order:
+        parser.error("--reuse-shots requires --order")
+    if args.script:
+        script = _load_script(args.script)
+        clip_id = str(uuid.uuid4())[:8]
+    else:
+        script = _load_script_from_db(ROOT / "data" / "state.db", args.script_id)
+        clip_id = stable_clip_id(script["script_id"])
+
     title = script["title"]
     narration_text = script["narration"]
-    shots_raw = _apply_style_suffix(script["shots"])
+    shots_raw = script["shots"]
+    if not args.reuse_shots:
+        shots_raw = _apply_style_suffix(shots_raw)
 
-    clip_id = str(uuid.uuid4())[:8]
     slug = title_slug(title, clip_id)
+    shot_order = parse_shot_order(args.order, expected_count=4) if args.order else None
 
     SHOTS_DIR.mkdir(parents=True, exist_ok=True)
     NARRATION_DIR.mkdir(parents=True, exist_ok=True)
@@ -148,30 +241,49 @@ def main() -> None:
     print(f"clip_id  : {clip_id}")
     print(f"shots    : {len(shots_raw)}")
     print(f"dry-run  : {args.dry_run}")
+    if args.reuse_shots:
+        print(f"reuse    : {args.reuse_shots}")
+        print(f"order    : {shot_order}")
     print()
 
     ass_path = SUBS_DIR / f"{clip_id}_subs.ass"
 
     # ------------------------------------------------------------------
-    # Stage 1 — Generate shots
+    # Stage 1 — Generate shots (skipped when --reuse-shots is set)
     # ------------------------------------------------------------------
-    print("[1/4] Generating shots...")
-
-    if args.dry_run:
-        shot_paths: list[Path] = []
-        for i, s in enumerate(shots_raw):
-            p = SHOTS_DIR / f"{clip_id}_shot_{i:02d}.mp4"
-            _placeholder_mp4(p)
-            shot_paths.append(p)
-            print(f"  [dry-run] placeholder: {p.name}")
+    if args.reuse_shots:
+        print("[1/4] Reusing existing shots (no OpenRouter call)...")
+        if args.dry_run:
+            prefix = script.get("script_id", clip_id)[:8]
+            shot_paths = [args.reuse_shots / f"{prefix}_shot_{i}.mp4" for i in shot_order]
+            for i, p in zip(shot_order, shot_paths):
+                print(f"  [dry-run] would use original shot {i}: {p.name}")
+        else:
+            shot_paths = resolve_reused_shot_paths(
+                args.reuse_shots,
+                script["script_id"],
+                shot_order,
+            )
+            for i, p in zip(shot_order, shot_paths):
+                print(f"  original shot {i} -> {p.name}")
     else:
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            sys.exit("ERROR: OPENROUTER_API_KEY not set")
-        client = OpenRouterKlingClient(api_key=api_key)
-        shot_paths = generate_shots(shots_raw, SHOTS_DIR, client)
-        for p in shot_paths:
-            print(f"  downloaded: {p.name}")
+        print("[1/4] Generating shots...")
+
+        if args.dry_run:
+            shot_paths: list[Path] = []
+            for i, s in enumerate(shots_raw):
+                p = SHOTS_DIR / f"{clip_id}_shot_{i:02d}.mp4"
+                _placeholder_mp4(p)
+                shot_paths.append(p)
+                print(f"  [dry-run] placeholder: {p.name}")
+        else:
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                sys.exit("ERROR: OPENROUTER_API_KEY not set")
+            client = OpenRouterKlingClient(api_key=api_key)
+            shot_paths = generate_shots(shots_raw, SHOTS_DIR, client)
+            for p in shot_paths:
+                print(f"  downloaded: {p.name}")
 
     # ------------------------------------------------------------------
     # Stage 2 — Synthesize narration
@@ -224,8 +336,10 @@ def main() -> None:
         concat_list = Path(tmpdir) / "concat.txt"
         write_concat_list(shot_paths, concat_list)
 
-        # Estimate total duration from shot durations (fallback: 5s/shot)
-        total_duration_s = sum(s.get("duration_s", 5) for s in shots_raw)
+        if args.reuse_shots:
+            total_duration_s = _total_shot_duration(shot_paths)
+        else:
+            total_duration_s = sum(s.get("duration_s", 5) for s in shots_raw)
 
         tmp_output = output_path.with_suffix(".tmp.mp4")
         argv = build_assembler_argv(

@@ -110,6 +110,24 @@ def check_youtube_oauth(client_secrets: Path, oauth_token: Path) -> bool:
     return _ok("youtube-oauth", "client_secrets + cached token present")
 
 
+def check_espeak_ng() -> bool:
+    path = shutil.which("espeak-ng") or shutil.which("espeak")
+    if not path:
+        return _fail(
+            "espeak-ng",
+            "not on PATH — required for Kokoro; install espeak-ng for Windows",
+        )
+    return _ok("espeak-ng", path)
+
+
+def check_kokoro() -> bool:
+    try:
+        import kokoro  # noqa: F401
+    except ImportError:
+        return _fail("kokoro", "pip install kokoro soundfile (Pivot.7 narration engine)")
+    return _ok("kokoro")
+
+
 def check_copyright_acknowledgement(cfg) -> bool:
     """Pivot.0 added copyright_acknowledgement as an optional ack of the
     elevated movie-clip strike risk. Surface as a soft warning in --check;
@@ -153,6 +171,8 @@ def run_checks(cfg) -> int:
     results.append(check_ffmpeg())
     results.append(check_yt_dlp())
     results.append(check_faster_whisper(cfg.whisper_device))
+    results.append(check_kokoro())
+    results.append(check_espeak_ng())
     results.append(
         check_ollama(
             os.environ.get("OLLAMA_HOST", "http://localhost:11434"),

@@ -238,7 +238,6 @@ DEAD_SELECTOR = (
 )
 DEAD_RENDER = (
     "render_strategy",
-    "blurred_bg_sigma",
     "source_pane_aspect",
     "dialogue_reverb_enabled",
     "dialogue_reverb_aecho",
@@ -262,3 +261,5 @@ def test_config_yaml_loads_cleanly():
     assert cfg.ai_gen.model == "kwaivgi/kling-v3.0-std"
     assert cfg.compliance.ai_disclosure is True
     assert cfg.retention.ai_gen_shots == 7
+    assert cfg.clips_per_day == 1
+    assert cfg.upload_weekdays == frozenset({1, 3})

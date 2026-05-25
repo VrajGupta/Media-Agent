@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from src.config_loader.weekdays import parse_upload_weekdays
 
 
 # ---------------------------------------------------------------------------
@@ -32,8 +34,8 @@ class AiGenConfig(BaseModel):
     per_clip_cost_cents_max: int
     daily_spend_cents_ceiling: int
     max_concurrent: int = 2
-    shots_per_clip_min: int = 4
-    shots_per_clip_max: int = 6
+    shots_per_clip_min: int = 1
+    shots_per_clip_max: int = 3
     shot_duration_s: int = 5
     style_suffix: str = (
         "3D animated, Pixar-shaded surface, surreal cinematic lighting, "
@@ -78,9 +80,35 @@ class ScripterConfig(BaseModel):
 
 
 class NarrationConfig(BaseModel):
+    engine: Literal["kokoro", "edge"] = "kokoro"
+    kokoro_voice: str = "am_michael"
     voice: str = "en-US-GuyNeural"
     rate: str = "+10%"
     pitch: str = "0Hz"
+
+    @field_validator("engine")
+    @classmethod
+    def _validate_engine(cls, value: str) -> str:
+        if value not in ("kokoro", "edge"):
+            raise ValueError(f"narration.engine must be 'kokoro' or 'edge', got {value!r}")
+        return value
+
+
+class AssemblerConfig(BaseModel):
+    crossfade_enabled: bool = True
+    crossfade_duration_s: float = 0.25
+
+
+class ImageFetchConfig(BaseModel):
+    sources: list[str] = Field(default_factory=lambda: [
+        "logo", "wikimedia", "openverse", "web",
+    ])
+    min_resolution: int = 512
+    max_candidates_per_source: int = 5
+    web_fallback_enabled: bool = True
+    living_person_patterns: list[str] = Field(default_factory=lambda: [
+        "portrait of", "photo of", "headshot", "selfie",
+    ])
 
 
 class SubtitlesConfig(BaseModel):
@@ -104,6 +132,7 @@ class Retention(BaseModel):
     ai_gen_shots: int = 7
     narration: int = 14
     scripts: int = 90
+    images: int = 30
     # Retained
     output_post_upload: int
     rejected_clips: int
@@ -130,6 +159,7 @@ class Paths(BaseModel):
     ai_gen_shots_dir: str = "data/ai_gen_shots"
     narration_dir: str = "data/narration"
     scripts_dir: str = "data/scripts"
+    images_dir: str = "data/images"
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +173,18 @@ class Config(BaseModel):
     days_per_run: int
     upload_slots: list[str]
     timezone: str
+    upload_weekdays: frozenset[int] = Field(default_factory=lambda: frozenset(range(7)))
+
+    @field_validator("upload_weekdays", mode="before")
+    @classmethod
+    def _coerce_upload_weekdays(cls, value: object) -> frozenset[int]:
+        if isinstance(value, frozenset):
+            return value
+        if value is None:
+            return parse_upload_weekdays(None)
+        if isinstance(value, (list, tuple)):
+            return parse_upload_weekdays(list(value))
+        raise ValueError(f"upload_weekdays must be a list of weekday tokens, got {type(value)!r}")
 
     # Models
     whisper_model: str
@@ -169,6 +211,12 @@ class Config(BaseModel):
     loudness_target_lufs: float
     music_enabled: bool = True
     music_volume_db: float = -15.0
+    blurred_bg_sigma: int = 20
+    ken_burns_zoom_rate: float = 0.0015
+
+    # Pivot.7 sub-models
+    image_fetch: ImageFetchConfig = Field(default_factory=ImageFetchConfig)
+    assembler: AssemblerConfig = Field(default_factory=AssemblerConfig)
 
     # Quota
     youtube_quota_daily_units: int

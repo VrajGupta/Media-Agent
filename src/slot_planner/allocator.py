@@ -59,6 +59,7 @@ def allocate_slots(
     clips_per_day: int,
     timezone_name: str,
     min_lead_minutes: int = 20,
+    allowed_weekdays: frozenset[int] | None = None,
 ) -> Tuple[List[SlotAssignment], List[str]]:
     """Assign each clip to a slot in chronological order.
 
@@ -82,6 +83,9 @@ def allocate_slots(
     if days_per_run <= 0 or clips_per_day <= 0:
         return ([], list(clip_ids))
 
+    if allowed_weekdays is None:
+        allowed_weekdays = frozenset(range(7))
+
     tz = ZoneInfo(timezone_name)
     if now_local.tzinfo != tz and now_local.utcoffset() != now_local.astimezone(tz).utcoffset():
         # Coerce now_local into the requested zone for date arithmetic.
@@ -96,6 +100,8 @@ def allocate_slots(
     base_date = now_local.date()
     for day_offset in range(days_per_run):
         day = base_date + timedelta(days=day_offset)
+        if day.weekday() not in allowed_weekdays:
+            continue
         for slot_time in daily_slots:
             local_dt = datetime(
                 day.year, day.month, day.day,

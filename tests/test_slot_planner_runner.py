@@ -365,3 +365,30 @@ def test_run_all_force_includes_already_slotted_clips(tmp_path):
     assert results[0].outcome == SlotOutcome.slotted
     # The old slot path got renamed to the new one.
     assert not old_target.exists()
+
+
+def test_run_all_honors_upload_weekdays_from_config(tmp_path):
+    """Tue/Thu allowlist: Sunday run assigns Tuesday then Thursday, not Sunday."""
+    repo = _new_repo(tmp_path)
+    cfg = StubConfig(
+        tmp_path,
+        clips_per_day=1,
+        days_per_run=7,
+        upload_slots=["09:00"],
+        upload_weekdays=frozenset({1, 3}),
+    )
+    pending = tmp_path / "output" / "pending"
+    _seed_video(repo)
+    for i, clip_id in enumerate(["c_tue", "c_thu"]):
+        _seed_clip(repo, clip_id=clip_id, status="quality_pass")
+        path = _make_unscheduled_file(pending, clip_id, slug=f"slug_{i}")
+        repo.conn.execute(
+            "UPDATE clips SET output_path=? WHERE clip_id=?",
+            (str(path), clip_id),
+        )
+
+    results = run_all(repo, cfg, now_local=SUNDAY_0200_SGT)
+    slotted = [r for r in results if r.outcome == SlotOutcome.slotted]
+    assert len(slotted) == 2
+    assert slotted[0].publish_slot_local == "2026-05-05 09:00"
+    assert slotted[1].publish_slot_local == "2026-05-07 09:00"

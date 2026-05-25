@@ -137,6 +137,7 @@ class StubConfig:
         days_per_run: int = 7,
         upload_slots: list[str] | None = None,
         timezone: str = "Asia/Singapore",
+        upload_weekdays: frozenset[int] | None = None,
         human_review: bool = True,
     ):
         self.disk_soft_cap_gb = soft_cap_gb
@@ -179,6 +180,9 @@ class StubConfig:
             "09:00", "13:00", "17:00", "21:00",
         ]
         self.timezone = timezone
+        self.upload_weekdays = (
+            upload_weekdays if upload_weekdays is not None else frozenset(range(7))
+        )
         self.human_review = human_review
         self.compliance = self._Compliance(ai_disclosure=ai_disclosure)
         self.retention = self._Retention()

@@ -13,6 +13,8 @@ from typing import Callable
 
 import ollama
 
+from src.scripter.shots import normalize_shots
+
 
 def _chat_json(model: str, prompt: str) -> dict:
     resp = ollama.chat(
@@ -134,15 +136,24 @@ narration field rules:
 6. Total must be 30-50 words. Count before writing.
 7. No "I think". No "as an AI". No "<<placeholder>>".
 
+shots field rules (exactly 4 tagged objects):
+- Aim for ~2 real_image + ~2 ai_video, alternating so ai_video shots sit between real ones.
+- real_image: the recognizable "money shot" — a real product, logo, or object viewers can identify.
+  NEVER a living person. Use products, logos, hardware, or objects only.
+  Schema: {{"kind": "real_image", "entity": "<concrete thing to source>", "search_query": "<optional refinement>", "duration_s": 4}}
+- ai_video: abstract/atmospheric/transitional b-roll that connects the real shots.
+  NEVER depict a person talking or yapping on screen.
+  Schema: {{"kind": "ai_video", "prompt": "<10-20 word cinematic shot>", "duration_s": 4}}
+
 JSON structure (output this exactly, no markdown fences):
 {{
   "title": "5 to 8 word punchy title",
   "narration": "four sentences, 30-50 words total",
   "shots": [
-    "10-20 word cinematic shot description",
-    "10-20 word cinematic shot description",
-    "10-20 word cinematic shot description",
-    "10-20 word cinematic shot description"
+    {{"kind": "real_image", "entity": "...", "duration_s": 4}},
+    {{"kind": "ai_video", "prompt": "...", "duration_s": 4}},
+    {{"kind": "real_image", "entity": "...", "duration_s": 4}},
+    {{"kind": "ai_video", "prompt": "...", "duration_s": 4}}
   ],
   "style_notes": "brief visual aesthetic phrase"
 }}
@@ -160,7 +171,7 @@ def make_script_generator(model: str) -> Callable:
         return {
             "title": str(data["title"]),
             "narration": str(data["narration"]),
-            "shots": [str(s) for s in shots],
+            "shots": normalize_shots(shots),
             "style_notes": str(data.get("style_notes", "")),
         }
     return _fn

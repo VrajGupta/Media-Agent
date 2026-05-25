@@ -56,6 +56,7 @@ class RetentionResult:
     would_delete_output_pending: List[str] = field(default_factory=list)
     would_delete_output_approved: List[str] = field(default_factory=list)
     would_delete_output_rejected: List[str] = field(default_factory=list)
+    would_delete_images: List[str] = field(default_factory=list)
     would_prune_dup_hashes: int = 0
     would_prune_quota_usage: int = 0
     would_vacuum: bool = False
@@ -65,6 +66,7 @@ class RetentionResult:
     deleted_output_pending: int = 0
     deleted_output_approved: int = 0
     deleted_output_rejected: int = 0
+    deleted_images: int = 0
     pruned_dup_hashes: int = 0
     pruned_quota_usage: int = 0
     vacuumed: bool = False
@@ -312,6 +314,22 @@ def _run_vacuum(
     result.vacuumed = True
 
 
+def list_image_cache_candidates(
+    cfg: Config,
+    *,
+    now: datetime | None = None,
+) -> List[str]:
+    """data/images/* → TTL by mtime."""
+    images_dir = cfg.abs_path(getattr(cfg.paths, "images_dir", "data/images"))
+    if not images_dir.exists():
+        return []
+    threshold_days = int(getattr(cfg.retention, "images", 30))
+    return [
+        str(f) for f in images_dir.iterdir()
+        if f.is_file() and _file_age_days(f, now=now) >= threshold_days
+    ]
+
+
 def run_all(
     repo: Repository,
     cfg: Config,
@@ -337,6 +355,7 @@ def run_all(
     result.would_delete_output_pending = pending
     result.would_delete_output_approved = approved
     result.would_delete_output_rejected = list_rejected_candidates(cfg, now=now)
+    result.would_delete_images = list_image_cache_candidates(cfg, now=now)
     result.would_prune_dup_hashes = count_dup_hashes_to_prune(repo, cfg, now=now)
     result.would_prune_quota_usage = count_quota_usage_to_prune(repo, cfg, now=now)
     result.would_vacuum = _vacuum_due(cfg, now=now)
@@ -349,6 +368,7 @@ def run_all(
             f"pending={len(result.would_delete_output_pending)} "
             f"approved={len(result.would_delete_output_approved)} "
             f"rejected={len(result.would_delete_output_rejected)} "
+            f"images={len(result.would_delete_images)} "
             f"dup_hashes={result.would_prune_dup_hashes} "
             f"quota_usage={result.would_prune_quota_usage} "
             f"vacuum_due={result.would_vacuum}"
@@ -371,8 +391,11 @@ def run_all(
     for p in result.would_delete_output_rejected:
         if _safe_unlink(p, root=project_root, result=result, logs_dir=logs_dir):
             result.deleted_output_rejected += 1
+    for p in result.would_delete_images:
+        if _safe_unlink(p, root=project_root, result=result, logs_dir=logs_dir):
+            result.deleted_images += 1
 
-    # ---- prune DB rows (mirror the threshold math used by the count helpers) ---
+    # ---- prune DB rows
     if result.would_prune_dup_hashes:
         cutoff_dh = (now or datetime.now(timezone.utc)) - timedelta(
             days=int(cfg.retention.dup_hashes)
@@ -402,7 +425,7 @@ def run_all(
         "retention (real) sweep: "
         f"raw={result.deleted_raw} transcripts={result.deleted_transcripts} "
         f"pending={result.deleted_output_pending} approved={result.deleted_output_approved} "
-        f"rejected={result.deleted_output_rejected} "
+        f"rejected={result.deleted_output_rejected} images={result.deleted_images} "
         f"dup_hashes={result.pruned_dup_hashes} quota_usage={result.pruned_quota_usage} "
         f"vacuumed={result.vacuumed} already_gone={result.already_gone} "
         f"errors={len(result.delete_errors)}"
