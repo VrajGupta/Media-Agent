@@ -964,6 +964,7 @@ Zero banlist or profanity triggers.
 
 ### P7.6 — End-to-end hybrid spike (Issue 20) · Interactive · blocked by 15–19
 - [x] `scripts/spike_hybrid.py` (throwaway): one real topic → tagged shots → route → Kokoro → align → subs → hybrid assemble → `output/pending/`.
+- [x] **Live spike (2026-05-26, topic 82):** `output/pending/__unscheduled__spike-82__it_s_in_the_air_apple_tv_1391.mp4` — 1080×1920@30, ~7.3 MB, exit 0 (~5 min). Script: 2× `real_image` (apple_tv_logo, onlyfans_icon) + 2× `ai_video`; crossfades on; Kokoro + Whisper align OK. Non-fatal Loguru `UnicodeEncodeError` on Windows cp1252 for `→` in ai_gen logs (pipeline did not abort).
 - [ ] Cost recorded to `quota_usage(provider='openrouter')`; ≈ half the 4-shot baseline; reconciled ±10% vs OpenRouter dashboard.
 - [ ] Provenance report per real_image shot (source/license/url).
 - [ ] **HITL sign-off:** real images correct + on-topic, AI shots read as transitions (no synthetic person), Kokoro natural, crossfades smooth.

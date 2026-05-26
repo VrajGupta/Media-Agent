@@ -116,3 +116,38 @@ def test_mixed_resolution_shots_stitch_to_1080x1920(tmp_path):
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert output.exists() and output.stat().st_size > 0
     assert _probe_resolution(output) == (1080, 1920)
+
+
+def test_generate_clip_hybrid_path_stitches_mixed_resolution(tmp_path):
+    """Spike path (_generate_clip) assembles 720×1280 + 1080×1920 → 1080×1920."""
+    import shutil
+    from unittest.mock import MagicMock, patch
+
+    from src.gen_run import _generate_clip
+    from tests.test_gen_run import _GenStubConfig, _hybrid_script
+
+    cfg = _GenStubConfig(tmp_path)
+    cfg.assembler.crossfade_enabled = True
+
+    shots_dir = tmp_path / "shots"
+    shots_dir.mkdir()
+    kling = _lavfi_shot(shots_dir, "kling.mp4", "720x1280", 24, 2.0)
+    ken_burns = _lavfi_shot(shots_dir, "kenburns.mp4", "1080x1920", 30, 2.0)
+    script = _hybrid_script("spike22", "Hybrid normalization")
+
+    def _fake_synthesize(_text, path, **_kwargs):
+        src = _lavfi_audio(path.parent, 7.5)
+        shutil.copy2(src, path)
+
+    with patch("src.gen_run.generate_shots", return_value=[kling, kling]), \
+         patch("src.gen_run._render_real_image_shot", return_value=ken_burns), \
+         patch("src.gen_run.synthesize", side_effect=_fake_synthesize), \
+         patch("src.gen_run.align", return_value=[{"word": "Hi", "start": 0.0, "end": 0.5}]), \
+         patch("src.gen_run.OpenRouterKlingClient"):
+        out = _generate_clip(
+            script, cfg, MagicMock(), openrouter_api_key="sk-test", dry_run=False,
+        )
+
+    assert out is not None
+    assert out.exists() and out.stat().st_size > 0
+    assert _probe_resolution(out) == (1080, 1920)
