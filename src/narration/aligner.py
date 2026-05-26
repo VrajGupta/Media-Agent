@@ -46,7 +46,14 @@ def align(
     CPU with ``compute_type='int8'``.
     """
     model = _load_whisper_model(model_size, device=device, compute_type=compute_type)
-    segments, _ = model.transcribe(str(audio_path), word_timestamps=True)
+    try:
+        segments, _ = model.transcribe(str(audio_path), word_timestamps=True)
+    except RuntimeError:
+        if device == "cuda":
+            model = _load_whisper_model(model_size, device="cpu", compute_type="int8")
+            segments, _ = model.transcribe(str(audio_path), word_timestamps=True)
+        else:
+            raise
     words: list[dict] = []
     for seg in segments:
         for w in seg.words or []:

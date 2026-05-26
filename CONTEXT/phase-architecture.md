@@ -1,7 +1,7 @@
 # Phase: architecture
-**Project:** Media-Agent (Pivot.6)
-**Status:** complete
-**Last updated:** 2026-05-24
+**Project:** Media-Agent (Pivot.6 → Pivot.7)
+**Status:** in-progress
+**Last updated:** 2026-05-26
 
 ## Objective
 
@@ -21,6 +21,7 @@ Design the database schema, configuration model, DAL layer, and module boundarie
 - **Dependency injection for callables** — `run_stage_b(cfg, repo, topics, *, generator_fn)` pattern. Test doubles injected; no monkeypatching of module globals.
 - **Provider ABC** — `ai_gen/base.py` defines `Provider` interface. `OpenRouterKlingClient` is production; `KlingClient` is fallback (API blocked on direct auth). Swappable without changing orchestrator.
 - **Module deprecation pattern** — `discovery/`, `downloader/`, `lang_detect/`, `selector/` retained as dead code for regression safety. Not called by any Pivot.6 path. Tests still run.
+- **[Pivot.7, ADR-0002] Canonical shot normalization in the assembler** — every **Shot** is conformed to one canonical format (**1080×1920, 30fps, yuv420p, SAR 1:1**, resolution from `cfg.output_resolution`) inside the filtergraph before it is **Stitched**. Kling std actually emits 720×1280@24 (CLAUDE.md's "native 1080×1920" was wrong); Ken Burns is 1080×1920@30. Without normalization, `xfade` (and the concat demuxer) fail on the mismatch (`err -22` / rc 4294967274). Normalization lives in a pure deep module (`src/assembler/normalize.py`); the crossfade-off path uses the concat *filter* (not the demuxer) on normalized inputs; all Clips canonicalize (pure-AI too).
 
 ## Accomplishments
 
@@ -30,6 +31,7 @@ Design the database schema, configuration model, DAL layer, and module boundarie
 - [2026-05-18] `src/config_loader/loader.py` extended with `TopicIngestConfig`, `AiGenConfig`, `ScripterConfig`, `NarrationConfig`, `SubtitlesConfig`, `ComplianceConfig` sub-models.
 - [2026-05-20] `src/scripter/ollama_fns.py` — 4 callable factories wired to DI slots in runner.py.
 - [2026-05-22] `src/gen_run.py` — orchestrator module with per-stage lambda pipeline and unified error handling.
+- [2026-05-26] ADR-0002 — canonical shot normalization in the assembler. Diagnosed + reproduced the Pivot.7 hybrid assembly failure; locked the normalization design; glossary terms **Stitch** / **Shot normalization** added. PRD + Issues 22–25 published for implementation.
 
 ## Artifacts
 
@@ -41,13 +43,19 @@ Design the database schema, configuration model, DAL layer, and module boundarie
 | Config models | `src/config_loader/loader.py` | Pydantic, YAML-validated at startup |
 | Provider ABC | `src/ai_gen/base.py` | Interface for video generators |
 | Schema tests | `tests/test_repository_pivot6.py` | 27 tests |
+| ADR-0002 | `docs/adr/0002-canonical-shot-normalization-in-assembler.md` | Assembler normalization decision |
+| Grill record | `CONTEXT/Grilling/2026-05-26-hybrid-assembly-xfade.md` | Evidence + locked decisions |
+| Fix PRD | `docs/prds/p7-fix-hybrid-assembly-normalization.md` | Issues 22–25 |
 
 ## Sessions
 
 - Ticket 01 (schema migration + DAL) — 2026-05-18
 - Config model refactor — 2026-05-18 / 2026-05-19
+- [p7-hybrid-assembly-fix-plan](.sessions/2026-05-26__p7-hybrid-assembly-fix-plan/handoff.md) — 2026-05-26: ADR-0002 assembler normalization + Issues 22–25
 
 ## Open Items
 
-- Migration has been committed but NOT applied to live `data/state.db` yet. Must run before Slice 10 unblock. Back up `data/state.db` first — this is the blocking DB migration.
+- ~~Migration not applied to live DB~~ — applied 2026-05-24 (see Pivot.6 INDEX).
 - `generation_jobs` table does not yet have a `retry_count` column — considered but deferred.
+- **ADR-0002 normalization is decided but not implemented.** Issues 22–25 are
+  `ready-for-agent`; Issue 22 is the unblocking fix.

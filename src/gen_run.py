@@ -85,6 +85,76 @@ def count_ai_video_shots(shots: list[dict]) -> int:
     return sum(1 for s in shots if s.get("kind") == "ai_video")
 
 
+_ENCODER_FAILURE_MARKERS = (
+    "h264_nvenc",
+    "nvenc",
+    "no nvenc capable devices",
+    "cannot load nvcuda",
+    "error initializing output stream",
+    "encoder",
+)
+
+
+def _is_encoder_failure(stderr: str) -> bool:
+    lower = stderr.lower()
+    return any(marker in lower for marker in _ENCODER_FAILURE_MARKERS)
+
+
+def _log_assembly_failure(cfg, clip_id: str, result) -> None:
+    logs_dir = cfg.abs_path(cfg.paths.logs_dir)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    tail = (result.stderr or "")[-4000:]
+    failure_log = logs_dir / f"assembly_fail_{clip_id}.log"
+    failure_log.write_text(tail, encoding="utf-8")
+    append_alert(
+        logs_dir,
+        "assembly_failed",
+        f"clip {clip_id}: ffmpeg rc={result.returncode}; see {failure_log.name}",
+    )
+
+
+def _run_assembly(
+    *,
+    cfg,
+    clip_id: str,
+    concat_list: Path,
+    narration_mp3: Path,
+    tmp_output: Path,
+    total_duration_s: float,
+    music_path: Path | None,
+    ass_path: Path,
+    shot_paths: list[Path],
+    asm_cfg,
+    durations: list[float],
+    video_codec: str = "h264_nvenc",
+):
+    resolution = tuple(cfg.output_resolution)
+    fps = int(getattr(cfg, "output_fps", 30))
+    multi_shot = len(shot_paths) > 1
+    return run_ffmpeg(
+        build_assembler_argv(
+            concat_list,
+            narration_mp3,
+            tmp_output,
+            total_duration_s=float(total_duration_s),
+            music_path=music_path,
+            ass_path=ass_path,
+            music_volume_db=float(cfg.music_volume_db),
+            loudness_target_lufs=float(cfg.loudness_target_lufs),
+            nvenc_preset=cfg.nvenc_preset,
+            nvenc_cq=int(cfg.nvenc_cq),
+            shot_paths=shot_paths if multi_shot else None,
+            crossfade_enabled=asm_cfg.crossfade_enabled,
+            crossfade_duration_s=float(asm_cfg.crossfade_duration_s),
+            shot_durations_s=durations,
+            resolution=resolution,
+            fps=fps,
+            video_codec=video_codec,
+        ),
+        tmp_output,
+    )
+
+
 def _render_real_image_shot(
     shot: dict,
     index: int,
@@ -208,28 +278,45 @@ def _generate_clip(
             )
             music_path = tracks[0] if tracks else None
 
-        argv = build_assembler_argv(
-            concat_list,
-            narration_mp3,
-            tmp_output,
-            total_duration_s=float(total_duration_s),
+        result = _run_assembly(
+            cfg=cfg,
+            clip_id=clip_id,
+            concat_list=concat_list,
+            narration_mp3=narration_mp3,
+            tmp_output=tmp_output,
+            total_duration_s=total_duration_s,
             music_path=music_path,
             ass_path=ass_path,
-            music_volume_db=float(cfg.music_volume_db),
-            loudness_target_lufs=float(cfg.loudness_target_lufs),
-            nvenc_preset=cfg.nvenc_preset,
-            nvenc_cq=int(cfg.nvenc_cq),
-            shot_paths=shot_paths if asm_cfg.crossfade_enabled else None,
-            crossfade_enabled=asm_cfg.crossfade_enabled,
-            crossfade_duration_s=float(asm_cfg.crossfade_duration_s),
-            shot_durations_s=durations,
+            shot_paths=shot_paths,
+            asm_cfg=asm_cfg,
+            durations=durations,
         )
-        result = run_ffmpeg(argv, tmp_output)
+
+        if result.returncode != 0 or result.output_size_bytes == 0:
+            if _is_encoder_failure(result.stderr or ""):
+                logger.warning("NVENC assembly failed for {}; retrying with libx264", clip_id)
+                result = _run_assembly(
+                    cfg=cfg,
+                    clip_id=clip_id,
+                    concat_list=concat_list,
+                    narration_mp3=narration_mp3,
+                    tmp_output=tmp_output,
+                    total_duration_s=total_duration_s,
+                    music_path=music_path,
+                    ass_path=ass_path,
+                    shot_paths=shot_paths,
+                    asm_cfg=asm_cfg,
+                    durations=durations,
+                    video_codec="libx264",
+                )
 
     if result.returncode != 0 or result.output_size_bytes == 0:
         if tmp_output.exists():
             tmp_output.unlink()
-        raise RuntimeError(f"ffmpeg failed (rc={result.returncode}) for clip {clip_id}")
+        _log_assembly_failure(cfg, clip_id, result)
+        raise RuntimeError(
+            f"ffmpeg failed (rc={result.returncode}) for clip {clip_id}"
+        )
 
     os.replace(tmp_output, output_path)
     logger.info("assembled: {}", output_path.name)

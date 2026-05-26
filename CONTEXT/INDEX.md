@@ -18,7 +18,7 @@ Tech/AI news YouTube Shorts pipeline. Slices 1–9 complete. **Slice 10 uploaded
 | Phase | File | Status | Last Updated | Summary |
 |---|---|---|---|---|
 | planning | [phase-planning.md](phase-planning.md) | complete | 2026-05-24 | Niche locked (Tech/AI), 10-slice plan, two-gate sign-off; Slice 10 refined (shot 3 lead, 315¢, reuse-shots, same-day slot) + Slice 11 Tue/Thu cadence added |
-| architecture | [phase-architecture.md](phase-architecture.md) | complete | 2026-05-24 | SQLite schema (4 Pivot.6 tables), Pydantic Config sub-models, 50+ DAL helpers, Provider ABC |
+| architecture | [phase-architecture.md](phase-architecture.md) | in-progress | 2026-05-26 | SQLite schema (4 Pivot.6 tables), Pydantic Config, 50+ DAL helpers, Provider ABC; **ADR-0002 assembler shot normalization** (Pivot.7 hybrid fix) |
 | development | [phase-development.md](phase-development.md) | in-progress | 2026-05-24 | Slices 1–9 complete; Slice 10 uploaded (ship gate partial); Issue 11/14 code shipped |
 | testing | [phase-testing.md](phase-testing.md) | in-progress | 2026-05-24 | 740+ tests; session added reuse-shots, weekday, aligner CPU fallback tests |
 | deployment | [phase-deployment.md](phase-deployment.md) | in-progress | 2026-05-24 | Slice 10 live upload succeeded; OAuth re-authed 2026-05-24 |

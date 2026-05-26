@@ -23,7 +23,7 @@ def _base_args(tmp_path):
     return concat_list, narration, output, shots
 
 
-def test_crossfade_disabled_matches_concat_demuxer_argv(tmp_path):
+def test_crossfade_disabled_without_shot_paths_uses_concat_demuxer(tmp_path):
     concat_list, narration, output, _ = _base_args(tmp_path)
     baseline = build_assembler_argv(
         concat_list, narration, output, total_duration_s=8.0,
@@ -122,3 +122,106 @@ def test_image_fetch_failure_skips_clip_without_crashing_batch(tmp_path):
         )
     assert success is True
     assert summary["stages"]["generate_clips"]["count"] == 1
+
+
+def test_generate_clip_logs_stderr_on_assembly_failure(tmp_path):
+    from tests.test_gen_run import _GenStubConfig, _hybrid_script
+
+    cfg = _GenStubConfig(tmp_path)
+    script = _hybrid_script("s1", "Hybrid")
+    fake_shot = tmp_path / "ai.mp4"
+    fake_shot.write_bytes(b"x")
+    real_shot = tmp_path / "real.mp4"
+    real_shot.write_bytes(b"x")
+
+    def _fail_ffmpeg(argv, output_path):
+        return MagicMock(
+            returncode=4294967274,
+            stderr="First input link main parameters do not match xfade parameters error -22",
+            output_size_bytes=0,
+        )
+
+    with patch("src.gen_run.generate_shots", return_value=[fake_shot, fake_shot]), \
+         patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
+         patch("src.gen_run.synthesize"), \
+         patch("src.gen_run.align", return_value=[]), \
+         patch("src.gen_run.write_line_ass_file"), \
+         patch("src.gen_run.run_ffmpeg", side_effect=_fail_ffmpeg), \
+         patch("src.gen_run.OpenRouterKlingClient"):
+        with pytest.raises(RuntimeError, match="ffmpeg failed"):
+            _generate_clip(script, cfg, MagicMock(), openrouter_api_key="sk-test", dry_run=False)
+
+    failure_log = Path(cfg.paths.logs_dir) / "assembly_fail_s1.log"
+    assert failure_log.exists()
+    assert "xfade" in failure_log.read_text(encoding="utf-8")
+    alerts = (Path(cfg.paths.logs_dir) / "alerts.md").read_text(encoding="utf-8")
+    assert "assembly_failed" in alerts
+
+
+def test_generate_clip_retries_libx264_on_encoder_failure(tmp_path):
+    from tests.test_gen_run import _GenStubConfig, _hybrid_script
+
+    cfg = _GenStubConfig(tmp_path)
+    script = _hybrid_script("s1", "Hybrid")
+    fake_shot = tmp_path / "ai.mp4"
+    fake_shot.write_bytes(b"x")
+    real_shot = tmp_path / "real.mp4"
+    real_shot.write_bytes(b"x")
+    calls: list[str] = []
+
+    def _ffmpeg_side_effect(argv, output_path):
+        codec_idx = argv.index("-c:v") + 1 if "-c:v" in argv else -1
+        codec = argv[codec_idx] if codec_idx else ""
+        calls.append(codec)
+        if codec == "h264_nvenc":
+            return MagicMock(
+                returncode=1,
+                stderr="Error initializing output stream 0:0 -- h264_nvenc not found",
+                output_size_bytes=0,
+            )
+        output_path.write_bytes(b"assembled")
+        return MagicMock(returncode=0, stderr="", output_size_bytes=100)
+
+    with patch("src.gen_run.generate_shots", return_value=[fake_shot, fake_shot]), \
+         patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
+         patch("src.gen_run.synthesize"), \
+         patch("src.gen_run.align", return_value=[]), \
+         patch("src.gen_run.write_line_ass_file"), \
+         patch("src.gen_run.run_ffmpeg", side_effect=_ffmpeg_side_effect), \
+         patch("src.gen_run.OpenRouterKlingClient"):
+        out = _generate_clip(script, cfg, MagicMock(), openrouter_api_key="sk-test", dry_run=False)
+
+    assert out is not None
+    assert calls == ["h264_nvenc", "libx264"]
+
+
+def test_generate_clip_does_not_retry_on_filtergraph_failure(tmp_path):
+    from tests.test_gen_run import _GenStubConfig, _hybrid_script
+
+    cfg = _GenStubConfig(tmp_path)
+    script = _hybrid_script("s1", "Hybrid")
+    fake_shot = tmp_path / "ai.mp4"
+    fake_shot.write_bytes(b"x")
+    real_shot = tmp_path / "real.mp4"
+    real_shot.write_bytes(b"x")
+    calls = {"n": 0}
+
+    def _ffmpeg_side_effect(argv, output_path):
+        calls["n"] += 1
+        return MagicMock(
+            returncode=4294967274,
+            stderr="error -22 (Invalid argument) xfade parameters do not match",
+            output_size_bytes=0,
+        )
+
+    with patch("src.gen_run.generate_shots", return_value=[fake_shot, fake_shot]), \
+         patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
+         patch("src.gen_run.synthesize"), \
+         patch("src.gen_run.align", return_value=[]), \
+         patch("src.gen_run.write_line_ass_file"), \
+         patch("src.gen_run.run_ffmpeg", side_effect=_ffmpeg_side_effect), \
+         patch("src.gen_run.OpenRouterKlingClient"):
+        with pytest.raises(RuntimeError):
+            _generate_clip(script, cfg, MagicMock(), openrouter_api_key="sk-test", dry_run=False)
+
+    assert calls["n"] == 1

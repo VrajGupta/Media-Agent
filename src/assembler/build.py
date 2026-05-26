@@ -1,31 +1,25 @@
 """ffmpeg argv builder for Pivot.6 assembly.
 
 Pivot.6 assembly is fundamentally different from the old editor (sourced clips):
-  - Input: N shot MP4s already in 1080x1920 native format (no blurred-bg)
+  - Input: N shot MP4s (heterogeneous resolution/fps in Pivot.7 hybrid)
   - Audio: external narration MP3 (no dialogue extraction from shots)
-  - No subtitle burn (Slice 5 adds that)
   - Optional music bed duck/mix
+  - Per-input shot normalization before stitch (ADR-0002)
 
 Workflow:
-  1. write_concat_list() -> shots_list.txt (ffmpeg concat format)
+  1. write_concat_list() -> shots_list.txt (legacy single-input concat demuxer)
   2. build_assembler_argv() -> argv for ffmpeg subprocess
 
-Video filtergraph:
-  [0:v] concat N shots, fps=30 -> [v_out]
-
-Audio filtergraph (no music):
-  [1:a] loudnorm -> aresample -> [a]
-
-Audio filtergraph (with music):
-  [1:a] loudnorm -> aresample -> [a_voice]
-  [2:a] aloop -> atrim -> asetpts -> volume -> aresample -> [a_music]
-  [a_voice][a_music] amix -> [a]
+Video filtergraph (multi-shot):
+  normalize each [i:v] -> [vn{i}], then xfade or concat filter -> [v_out]
 """
 
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
+
+from src.assembler.normalize import normalize_input_chain
 
 
 def write_concat_list(shot_paths: list[Path], dest: Path) -> Path:
@@ -48,15 +42,22 @@ def build_assembler_argv(
     loudness_target_lufs: float = -14.0,
     nvenc_preset: str = "p5",
     nvenc_cq: int = 23,
+    libx264_preset: str = "medium",
+    libx264_crf: int = 23,
     shot_paths: list[Path] | None = None,
     crossfade_enabled: bool = False,
     crossfade_duration_s: float = 0.25,
     shot_durations_s: list[float] | None = None,
+    resolution: tuple[int, int] = (1080, 1920),
+    fps: int = 30,
+    video_codec: str = "h264_nvenc",
 ) -> list[str]:
     """Return ffmpeg argv for Pivot.6/7 assembly. No ffmpeg is invoked here."""
     ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
     music_enabled = music_path is not None
-    use_crossfade = crossfade_enabled and shot_paths and len(shot_paths) > 1
+    multi_shot = bool(shot_paths and len(shot_paths) > 1)
+    use_crossfade = crossfade_enabled and multi_shot
+    width, height = resolution
 
     filtergraph = _build_filtergraph(
         total_duration_s=total_duration_s,
@@ -64,9 +65,13 @@ def build_assembler_argv(
         music_volume_db=music_volume_db,
         loudness_target_lufs=loudness_target_lufs,
         ass_path=ass_path,
-        shot_paths=shot_paths if use_crossfade else None,
+        shot_paths=shot_paths if multi_shot else None,
+        crossfade_enabled=use_crossfade,
         crossfade_duration_s=crossfade_duration_s,
         shot_durations_s=shot_durations_s,
+        width=width,
+        height=height,
+        fps=fps,
     )
 
     argv: list[str] = [
@@ -76,7 +81,7 @@ def build_assembler_argv(
         "-loglevel", "error",
     ]
 
-    if use_crossfade:
+    if multi_shot:
         for shot in shot_paths:
             argv += ["-i", str(shot)]
     else:
@@ -95,9 +100,22 @@ def build_assembler_argv(
         "-filter_complex", filtergraph,
         "-map", "[v_out]",
         "-map", "[a]",
-        "-c:v", "h264_nvenc",
-        "-preset", nvenc_preset,
-        "-cq", str(nvenc_cq),
+    ]
+
+    if video_codec == "h264_nvenc":
+        argv += [
+            "-c:v", "h264_nvenc",
+            "-preset", nvenc_preset,
+            "-cq", str(nvenc_cq),
+        ]
+    else:
+        argv += [
+            "-c:v", video_codec,
+            "-preset", libx264_preset,
+            "-crf", str(libx264_crf),
+        ]
+
+    argv += [
         "-c:a", "aac",
         "-b:a", "128k",
         "-movflags", "+faststart",
@@ -117,6 +135,12 @@ def _escape_ass_path(path: Path) -> str:
     return f"'{s}'"
 
 
+def _finalize_video_chain(comp_label: str, *, fps: int, ass_path: Path | None) -> str:
+    if ass_path is not None:
+        return f"[{comp_label}]fps={fps},ass={_escape_ass_path(ass_path)}[v_out]"
+    return f"[{comp_label}]fps={fps}[v_out]"
+
+
 def _build_filtergraph(
     *,
     total_duration_s: float,
@@ -125,26 +149,45 @@ def _build_filtergraph(
     loudness_target_lufs: float,
     ass_path: Path | None = None,
     shot_paths: list[Path] | None = None,
+    crossfade_enabled: bool = False,
     crossfade_duration_s: float = 0.25,
     shot_durations_s: list[float] | None = None,
+    width: int = 1080,
+    height: int = 1920,
+    fps: int = 30,
 ) -> str:
     if shot_paths and len(shot_paths) > 1:
-        durations = shot_durations_s or [4.0] * len(shot_paths)
-        video_chain = _build_crossfade_video_chain(
-            len(shot_paths), durations, crossfade_duration_s, ass_path=ass_path,
-        )
+        if crossfade_enabled:
+            durations = shot_durations_s or [4.0] * len(shot_paths)
+            video_chain = _build_crossfade_video_chain(
+                len(shot_paths),
+                durations,
+                crossfade_duration_s,
+                width=width,
+                height=height,
+                fps=fps,
+                ass_path=ass_path,
+            )
+        else:
+            video_chain = _build_concat_filter_video_chain(
+                len(shot_paths),
+                width=width,
+                height=height,
+                fps=fps,
+                ass_path=ass_path,
+            )
     elif ass_path is not None:
-        video_chain = f"[0:v]fps=30,ass={_escape_ass_path(ass_path)}[v_out]"
+        video_chain = f"[0:v]fps={fps},ass={_escape_ass_path(ass_path)}[v_out]"
     else:
-        video_chain = "[0:v]fps=30[v_out]"
+        video_chain = f"[0:v]fps={fps}[v_out]"
+
+    narr_input = len(shot_paths) if shot_paths else 1
+    music_input = narr_input + 1
 
     narration_filters = (
         f"loudnorm=I={loudness_target_lufs:g}:LRA=11:TP=-1.0,"
         "aresample=48000"
     )
-
-    narr_input = len(shot_paths) if shot_paths else 1
-    music_input = narr_input + 1
 
     if music_enabled:
         audio_chain = (
@@ -162,28 +205,54 @@ def _build_filtergraph(
     return f"{video_chain};{audio_chain}"
 
 
+def _build_concat_filter_video_chain(
+    n_shots: int,
+    *,
+    width: int,
+    height: int,
+    fps: int,
+    ass_path: Path | None = None,
+) -> str:
+    norm_chains = [
+        normalize_input_chain(i, width=width, height=height, fps=fps)
+        for i in range(n_shots)
+    ]
+    concat_inputs = "".join(f"[vn{i}]" for i in range(n_shots))
+    chain = (
+        f"{';'.join(norm_chains)};"
+        f"{concat_inputs}concat=n={n_shots}:v=1:a=0[v_comp]"
+    )
+    return f"{chain};{_finalize_video_chain('v_comp', fps=fps, ass_path=ass_path)}"
+
+
 def _build_crossfade_video_chain(
     n_shots: int,
     durations: list[float],
     crossfade_s: float,
     *,
+    width: int,
+    height: int,
+    fps: int,
     ass_path: Path | None = None,
 ) -> str:
-    """Build xfade chain for N shot inputs [0:v]..[N-1:v]."""
+    """Build xfade chain for N normalized shot inputs."""
     if n_shots < 2:
         raise ValueError("crossfade requires at least 2 shots")
-    parts: list[str] = []
-    label_in = "[0:v]"
+
+    norm_chains = [
+        normalize_input_chain(i, width=width, height=height, fps=fps)
+        for i in range(n_shots)
+    ]
+    parts: list[str] = list(norm_chains)
+    label_in = "[vn0]"
     elapsed = durations[0]
     for i in range(1, n_shots):
         label_out = f"[vx{i}]" if i < n_shots - 1 else "[v_comp]"
         offset = max(elapsed - crossfade_s, 0.0)
         parts.append(
-            f"{label_in}[{i}:v]xfade=transition=fade:duration={crossfade_s:g}:offset={offset:g}{label_out}"
+            f"{label_in}[vn{i}]xfade=transition=fade:duration={crossfade_s:g}:offset={offset:g}{label_out}"
         )
         label_in = label_out
         elapsed += durations[i] - crossfade_s
     chain = ";".join(parts)
-    if ass_path is not None:
-        return f"{chain};[v_comp]fps=30,ass={_escape_ass_path(ass_path)}[v_out]"
-    return f"{chain};[v_comp]fps=30[v_out]"
+    return f"{chain};{_finalize_video_chain('v_comp', fps=fps, ass_path=ass_path)}"

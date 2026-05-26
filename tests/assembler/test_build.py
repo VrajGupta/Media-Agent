@@ -250,3 +250,139 @@ def test_build_argv_without_ass_path_no_ass_filter(tmp_path):
     fg_idx = argv.index("-filter_complex")
     filtergraph = argv[fg_idx + 1]
     assert "ass=" not in filtergraph
+
+
+# ---------------------------------------------------------------------------
+# Shot normalization + crossfade (Issue 22)
+# ---------------------------------------------------------------------------
+
+
+def _filtergraph(argv: list[str]) -> str:
+    return argv[argv.index("-filter_complex") + 1]
+
+
+def test_crossfade_chain_normalizes_inputs_not_raw_into_xfade(tmp_path):
+    shots = _shot_paths(2, tmp_path)
+    concat_list = tmp_path / "list.txt"
+    write_concat_list(shots, concat_list)
+    narration = tmp_path / "narration.mp3"
+    narration.write_bytes(b"fake")
+    output = tmp_path / "out.mp4"
+
+    argv = build_assembler_argv(
+        concat_list,
+        narration,
+        output,
+        total_duration_s=7.75,
+        shot_paths=shots,
+        crossfade_enabled=True,
+        crossfade_duration_s=0.25,
+        shot_durations_s=[4.0, 4.0],
+        resolution=(1080, 1920),
+        fps=30,
+    )
+    fg = _filtergraph(argv)
+    assert "scale=1080:1920" in fg
+    assert "[vn0][vn1]xfade" in fg
+    assert "[0:v][1:v]xfade" not in fg
+
+
+@pytest.mark.parametrize("n_shots", [2, 3, 4])
+def test_crossfade_offsets_unchanged_with_normalization(tmp_path, n_shots):
+    shots = _shot_paths(n_shots, tmp_path)
+    concat_list = tmp_path / "list.txt"
+    write_concat_list(shots, concat_list)
+    narration = tmp_path / "narration.mp3"
+    narration.write_bytes(b"fake")
+    output = tmp_path / "out.mp4"
+    durations = [4.0] * n_shots
+
+    argv = build_assembler_argv(
+        concat_list,
+        narration,
+        output,
+        total_duration_s=sum(durations) - 0.25 * (n_shots - 1),
+        shot_paths=shots,
+        crossfade_enabled=True,
+        crossfade_duration_s=0.25,
+        shot_durations_s=durations,
+        resolution=(1080, 1920),
+        fps=30,
+    )
+    fg = _filtergraph(argv)
+    assert "offset=3.75" in fg
+    if n_shots >= 3:
+        assert "offset=7.5" in fg
+    if n_shots >= 4:
+        assert "offset=11.25" in fg
+
+
+def test_crossfade_off_multi_input_uses_concat_filter_not_demuxer(tmp_path):
+    shots = _shot_paths(2, tmp_path)
+    concat_list = tmp_path / "list.txt"
+    write_concat_list(shots, concat_list)
+    narration = tmp_path / "narration.mp3"
+    narration.write_bytes(b"fake")
+    output = tmp_path / "out.mp4"
+
+    argv = build_assembler_argv(
+        concat_list,
+        narration,
+        output,
+        total_duration_s=8.0,
+        shot_paths=shots,
+        crossfade_enabled=False,
+        resolution=(1080, 1920),
+        fps=30,
+    )
+
+    assert "-f" not in argv or argv[argv.index("-f") + 1] != "concat"
+    i_positions = [i for i, a in enumerate(argv) if a == "-i"]
+    assert len(i_positions) == 3  # two shots + narration
+    fg = _filtergraph(argv)
+    assert "concat=n=2:v=1:a=0" in fg
+    assert "[vn0][vn1]concat" in fg
+    assert "[2:a]" in fg
+
+
+def test_single_input_legacy_filtergraph_unchanged(tmp_path):
+    shots = _shot_paths(1, tmp_path)
+    concat_list = tmp_path / "list.txt"
+    write_concat_list(shots, concat_list)
+    narration = tmp_path / "narration.mp3"
+    narration.write_bytes(b"fake")
+    output = tmp_path / "out.mp4"
+
+    baseline = build_assembler_argv(
+        concat_list, narration, output, total_duration_s=10.0,
+    )
+    regression = build_assembler_argv(
+        concat_list, narration, output, total_duration_s=10.0,
+        resolution=(1080, 1920),
+        fps=30,
+    )
+    assert _filtergraph(baseline) == _filtergraph(regression)
+
+
+def test_build_argv_libx264_codec_emits_crf_not_nvenc_cq(tmp_path):
+    shots = _shot_paths(2, tmp_path)
+    concat_list = tmp_path / "list.txt"
+    write_concat_list(shots, concat_list)
+    narration = tmp_path / "narration.mp3"
+    narration.write_bytes(b"fake")
+    output = tmp_path / "out.mp4"
+
+    argv = build_assembler_argv(
+        concat_list,
+        narration,
+        output,
+        total_duration_s=8.0,
+        shot_paths=shots,
+        crossfade_enabled=False,
+        video_codec="libx264",
+    )
+
+    assert "libx264" in argv
+    assert "h264_nvenc" not in argv
+    assert "-crf" in argv
+    assert "-cq" not in argv

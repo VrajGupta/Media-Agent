@@ -71,6 +71,7 @@ download_estimated_bytes_per_video: 524288000         # 500 MB; fallback when pr
 
 # --- Render (Pivot.3 — full-screen blurred-bg, replaces split-screen) ---
 output_resolution: [1080, 1920]
+output_fps: 30
 render_strategy: "blurred_bg"                          # blurred_bg | center_crop | letterbox
 blurred_bg_sigma: 20                                   # gblur sigma when render_strategy=blurred_bg
 source_pane_aspect: "16:9"                             # for blurred_bg overlay sizing (1080:608 fg pane)

@@ -64,16 +64,17 @@ Retired because: no source video to slice. Code + ~55 tests deleted.
 
 ## 🔧 `assembler/` — Clip Assembler (replaces `editor/`, Pivot.6)
 **Job:** Render the final 1080×1920 Short from generated shots + narration.
-**Inputs:** list of `data/ai_gen/{script_id}/shot_{i}.mp4` + narration mp3 + subtitle ASS file + optional music track.
+**Inputs:** list of shot mp4s (heterogeneous resolution/fps in Pivot.7 hybrid) + narration mp3 + subtitle ASS file + optional music track.
 **Outputs:** `output/pending/__unscheduled__{clip_id}__{title_slug}.mp4`; `clips.status='rendered'`.
 **Pipeline (single ffmpeg invocation):**
-1. Concat 4–6 shot mp4s (hard cut, no crossfade — Kling already paces).
-2. Mux narration mp3 as sole audio track (replace source audio).
-3. Mix music bed at −22 dB with auto-duck under narration (reuses `editor/music.py` helpers).
-4. Burn ASS subtitle file (line-at-a-time, from `subtitles/`).
-5. NVENC encode: `h264_nvenc -preset p5 -cq 23 -movflags +faststart`, 2-pass loudness to −14 LUFS.
+1. **Shot normalization** (ADR-0002, `src/assembler/normalize.py`) — each input is scaled/padded to `cfg.output_resolution`, conformed to `cfg.output_fps`, yuv420p, SAR 1:1. Required because Kling std is 720×1280@24 while Ken Burns **Real-image shots** are 1080×1920@30.
+2. **Stitch** 4–6 shots — `xfade` when `assembler.crossfade_enabled`, else concat filter on normalized inputs (not the concat demuxer).
+3. Mux narration mp3 as sole audio track (replace source audio).
+4. Mix music bed at −22 dB with auto-duck under narration (reuses `editor/music.py` helpers).
+5. Burn ASS subtitle file (line-at-a-time, from `subtitles/`).
+6. NVENC encode (`h264_nvenc`, libx264 CPU fallback on encoder failure): `h264_nvenc -preset p5 -cq 23 -movflags +faststart`, 2-pass loudness to −14 LUFS.
 **Reused from `editor/`:** `music.py` (track picker + mix), `ffmpeg_runner.py` (NVENC helpers), `slug.py` (filename slug).
-**Dropped from `editor/`:** blurred-bg split/gblur/overlay filtergraph (Kling outputs native 9:16 — no blurred bg needed). Karaoke subtitle path (replaced by line-at-a-time in `subtitles/`).
+**Dropped from `editor/`:** blurred-bg split/gblur/overlay filtergraph. Karaoke subtitle path (replaced by line-at-a-time in `subtitles/`).
 
 ## 🔧 `subtitles/` — Subtitle Generator (Pivot.6: line-at-a-time)
 **Job:** Convert per-word timings (from `narration/`) into a line-at-a-time centered `.ass` file.
@@ -160,7 +161,7 @@ RSS feeds → [topic_ingest] (feedparser; 48h window; URL + title-similarity ded
                         ↓
                 [narration] (Edge TTS +10%/0Hz → mp3; Whisper forced-align → word timings) → data/narration/{script_id}.mp3
                         ↓
-               [assembler] (concat shots → mux narration → music-bed duck → ASS line-burn → NVENC 1080×1920 → −14 LUFS)
+               [assembler] (Shot normalize → Stitch shots [xfade or concat filter] → mux narration → music-bed duck → ASS line-burn → NVENC/libx264 1080×1920 → −14 LUFS)
                         ↓ output/pending/__unscheduled__{clip_id}__{slug}.mp4
           [quality_screen] (duration, loudness, pHash dedup)
                         ↓

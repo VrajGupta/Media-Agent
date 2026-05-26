@@ -206,6 +206,7 @@ class Config(BaseModel):
 
     # Assembler / render
     output_resolution: list[int]
+    output_fps: int = 30
     nvenc_preset: str
     nvenc_cq: int
     loudness_target_lufs: float

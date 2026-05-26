@@ -56,7 +56,7 @@ from src.editor.music import SUPPORTED_EXTENSIONS
 from src.editor.slug import title_slug
 from src.narration.aligner import align
 from src.narration.synth import synthesize
-from src.scripter.sanitize import clean_mojibake
+from src.config_loader import load_config
 from src.state import Repository, connect
 from src.subtitles.line_ass import write_line_ass_file
 
@@ -336,12 +336,21 @@ def main() -> None:
         concat_list = Path(tmpdir) / "concat.txt"
         write_concat_list(shot_paths, concat_list)
 
+        cfg = load_config(ROOT / "config.yaml")
+        asm_cfg = cfg.assembler
+
         if args.reuse_shots:
-            total_duration_s = _total_shot_duration(shot_paths)
+            durations = [ffprobe_duration_seconds(p) or 5.0 for p in shot_paths]
         else:
-            total_duration_s = sum(s.get("duration_s", 5) for s in shots_raw)
+            durations = [float(s.get("duration_s", 5)) for s in shots_raw]
+
+        if asm_cfg.crossfade_enabled and len(shot_paths) > 1:
+            total_duration_s = sum(durations) - asm_cfg.crossfade_duration_s * (len(durations) - 1)
+        else:
+            total_duration_s = sum(durations)
 
         tmp_output = output_path.with_suffix(".tmp.mp4")
+        multi_shot = len(shot_paths) > 1
         argv = build_assembler_argv(
             concat_list,
             narration_mp3,
@@ -349,6 +358,16 @@ def main() -> None:
             total_duration_s=float(total_duration_s),
             music_path=music_path,
             ass_path=ass_path,
+            music_volume_db=float(cfg.music_volume_db),
+            loudness_target_lufs=float(cfg.loudness_target_lufs),
+            nvenc_preset=cfg.nvenc_preset,
+            nvenc_cq=int(cfg.nvenc_cq),
+            shot_paths=shot_paths if multi_shot else None,
+            crossfade_enabled=asm_cfg.crossfade_enabled,
+            crossfade_duration_s=float(asm_cfg.crossfade_duration_s),
+            shot_durations_s=durations if multi_shot and asm_cfg.crossfade_enabled else None,
+            resolution=tuple(cfg.output_resolution),
+            fps=int(cfg.output_fps),
         )
 
         result = run_ffmpeg(argv, tmp_output)
