@@ -7,7 +7,7 @@
 - **ffmpeg** (system binary, Gyan 8.1-full_build) — concat, mux, loudnorm, ASS burn, NVENC encode. Must be on PATH.
 
 ## AI Video Generation (NEW — Pivot.6)
-- **OpenRouter Kling 3.0 std** (`kwaivgi/kling-v3.0-std`, accessed via OpenRouter REST API, `OPENROUTER_API_KEY`) — text-to-video generator. Native 9:16 output at 1080×1920. ~4 s shot duration, 4 shots stitched per clip. Bearer auth (no JWT signing). Implementation: `src/ai_gen/openrouter_kling.py` (`OpenRouterKlingClient(Provider)`, 23 unit tests).
+- **OpenRouter Kling 3.0 std** (`kwaivgi/kling-v3.0-std`, accessed via OpenRouter REST API, `OPENROUTER_API_KEY`) — text-to-video generator. Std tier emits **720×1280 @ 24fps**; the assembler applies **Shot normalization** to 1080×1920 (ADR-0002). ~4 s shot duration, 4 shots stitched per clip. Bearer auth (no JWT signing). Implementation: `src/ai_gen/openrouter_kling.py` (`OpenRouterKlingClient(Provider)`, 23 unit tests).
 - **Provider seam:** `src/ai_gen/base.Provider` ABC. Pika 2.0, MiniMax-Hailuo, and Seedance are drop-in replacements with ~½-day effort. Direct Kling API adapter (`src/ai_gen/kling.py`) retained as a fallback, not the production path (was blocked on error 1003 "Authorization not active").
 - **Why OpenRouter over direct Kling:** API activation is immediate, billing aggregates across providers in one place, single env var simplifies key rotation. Switching providers requires no downstream pipeline changes.
 - **Cost model:** per-second pricing; **$5/week budget → 2–3 clips/week at ~$2/clip**. Scales to ~$80/mo at 4 clips/day. Enforced by `per_clip_cost_cents_max` + `daily_spend_cents_ceiling` in `quota_ledger`.
@@ -20,7 +20,13 @@
 ## RSS Topic Ingest (NEW — Pivot.6)
 - **`feedparser`** (PyPI) — RSS/Atom feed parsing. Pulls last-48h items from mixed consumer + research tech/AI feeds. Source-of-truth for topic selection; replaces the static `topic_pool` config.
 - **Dedup:** URL hash (SHA-256 of `<link>`) + normalized-title similarity (Levenshtein or word-set overlap, configurable threshold). Catches reposts where the same story has different URLs across Verge / TechCrunch / etc.
-- **Feed list:** user-curated, configured at Slice 7. Recommended feeds documented in `docs/rss_feeds.md`.
+- **Feed list:** user-curated, configured at Slice 7. Documented in `docs/rss_feeds.md`.
+
+## Hybrid real-image shots (Pivot.7)
+- **`image_fetch`** — resolves **Real-image shot** stills from **Licensed sources** (logo APIs, Wikimedia, Openverse). Production config: `web_fallback_enabled: false` (ADR-0003). Open web search remains available for manual spike/dev configs only.
+- **`scripter/shot_plan.resolve_shot_plan`** — licensed miss degrades **Real-image shot** → **AI-video shot** before Kling billing; billable count known up front.
+- **Ken Burns** (`src/assembler/ken_burns.py`) — motion over sourced still → 1080×1920@30 mp4.
+- **Shot normalization** (ADR-0002) + **Stitch** (ADR-0002 assembler) — heterogeneous Kling + Ken Burns shots combined at 1080×1920.
 
 ## Video Acquisition (LEGACY — not used in Pivot.6)
 - **`yt-dlp`** (Python API) — was used for YouTube source-video downloads and caption sidecar retrieval (Phases 1–7, Pivots.0–5). Retained in `requirements.txt` but no code path calls it in Pivot.6. Will be removed when the `discovery/` and `downloader/` modules are fully deleted.

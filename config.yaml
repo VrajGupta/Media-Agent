@@ -98,8 +98,8 @@ dialogue_reverb_aecho: "0.8:0.88:60:0.4"
 music_enabled: true
 music_volume_db: -15
 
-# --- Copyright (movie clips have higher strike risk than podcasts) ---
-copyright_acknowledgement: "movie_clips_v1"            # explicit ack of pivot risk; bootstrap --check warns if absent
+# --- Copyright (hybrid real-image sourcing — ADR-0003) ---
+copyright_acknowledgement: "hybrid_real_image_v1"   # bootstrap --check warns if absent
 
 # --- Quota ---
 youtube_quota_daily_units: 10000
@@ -127,9 +127,9 @@ assembler:
   crossfade_duration_s: 0.25
 
 image_fetch:
-  sources: [logo, wikimedia, openverse, web]
+  sources: [logo, wikimedia, openverse]
   min_resolution: 512
-  web_fallback_enabled: true
+  web_fallback_enabled: false
 
 ken_burns_zoom_rate: 0.0015
 

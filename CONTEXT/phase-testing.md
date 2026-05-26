@@ -1,7 +1,7 @@
 # Phase: testing
 **Project:** Media-Agent (Pivot.6)
 **Status:** in-progress
-**Last updated:** 2026-05-24
+**Last updated:** 2026-05-26
 
 ## Objective
 
@@ -47,16 +47,18 @@ Maintain a comprehensive test suite that covers all pipeline modules. Tests must
 | Orchestrator tests | `tests/test_gen_run.py` | 10 tests (Slice 8) |
 | Uploader tests | `tests/test_uploader_*.py` | templater, insert_body, resumable, orphan_marker, runner |
 | Policy gate tests | `tests/test_policy_*.py` | banlist, profanity, NSFW, hook_sanity, evaluator |
-| Quality screen tests | `tests/test_quality_*.py` | duration, density, confidence, loudness, dedup, relocation |
+| Assembler tests | `tests/assembler/test_build.py`, `test_normalize.py`, `test_assemble_mixed_res.py` | argv + lavfi ffmpeg integration |
 
 ## Sessions
 
 - Ticket 01–05 TDD sessions (2026-05-18/2026-05-19)
 - Slice 8 + 9 test additions (2026-05-22)
+- [issue-22-shot-normalization-tdd](../.sessions/2026-05-26__issue-22-shot-normalization-tdd/handoff.md) — 2026-05-26
 
 ## Open Items
 
 - 7 pre-existing config failures (topic_pool, ai_gen) — known, tracked, not fixed yet.
+- [2026-05-26] Issue 26 TDD: `test_shot_plan.py`, `test_bootstrap_copyright.py`, licensed probe test. Issue 22 integration tests remain uncommitted pending live spike.
 - No integration tests that hit real Ollama or real OpenRouter. End-to-end verified only manually.
 - [2026-05-24] Issue 11 tests (`test_render_from_script_reuse`, `test_insert_ai_gen_clip`) — 8 tests.
 - [2026-05-24] Issue 14 tests (`test_upload_weekdays`, allocator weekday cases, runner wire-through) — 11 tests.

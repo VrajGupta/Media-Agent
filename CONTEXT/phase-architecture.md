@@ -31,7 +31,7 @@ Design the database schema, configuration model, DAL layer, and module boundarie
 - [2026-05-18] `src/config_loader/loader.py` extended with `TopicIngestConfig`, `AiGenConfig`, `ScripterConfig`, `NarrationConfig`, `SubtitlesConfig`, `ComplianceConfig` sub-models.
 - [2026-05-20] `src/scripter/ollama_fns.py` — 4 callable factories wired to DI slots in runner.py.
 - [2026-05-22] `src/gen_run.py` — orchestrator module with per-stage lambda pipeline and unified error handling.
-- [2026-05-26] ADR-0002 — canonical shot normalization in the assembler. Diagnosed + reproduced the Pivot.7 hybrid assembly failure; locked the normalization design; glossary terms **Stitch** / **Shot normalization** added. PRD + Issues 22–25 published for implementation.
+- [2026-05-26] Issue 22 implemented (`bca0095`): `src/assembler/normalize.py` + normalized filtergraph in `build.py`. ADR-0002 now live in code.
 
 ## Artifacts
 
@@ -45,17 +45,18 @@ Design the database schema, configuration model, DAL layer, and module boundarie
 | Schema tests | `tests/test_repository_pivot6.py` | 27 tests |
 | ADR-0002 | `docs/adr/0002-canonical-shot-normalization-in-assembler.md` | Assembler normalization decision |
 | Grill record | `CONTEXT/Grilling/2026-05-26-hybrid-assembly-xfade.md` | Evidence + locked decisions |
+| Normalize module | `src/assembler/normalize.py` | ADR-0002 implementation |
 | Fix PRD | `docs/prds/p7-fix-hybrid-assembly-normalization.md` | Issues 22–25 |
 
 ## Sessions
 
 - Ticket 01 (schema migration + DAL) — 2026-05-18
 - Config model refactor — 2026-05-18 / 2026-05-19
-- [p7-hybrid-assembly-fix-plan](.sessions/2026-05-26__p7-hybrid-assembly-fix-plan/handoff.md) — 2026-05-26: ADR-0002 assembler normalization + Issues 22–25
+- [p7-hybrid-assembly-fix-plan](.sessions/2026-05-26__p7-hybrid-assembly-fix-plan/handoff.md) — 2026-05-26: ADR-0002 + Issues 22–25 planning
+- [issue-22-shot-normalization-tdd](../.sessions/2026-05-26__issue-22-shot-normalization-tdd/handoff.md) — 2026-05-26: implementation commit `bca0095`
 
 ## Open Items
 
 - ~~Migration not applied to live DB~~ — applied 2026-05-24 (see Pivot.6 INDEX).
 - `generation_jobs` table does not yet have a `retry_count` column — considered but deferred.
-- **ADR-0002 normalization is decided but not implemented.** Issues 22–25 are
-  `ready-for-agent`; Issue 22 is the unblocking fix.
+- ~~ADR-0002 normalization not implemented~~ — **done** (`bca0095`). Live hybrid spike verification still pending.

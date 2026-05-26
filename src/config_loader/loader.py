@@ -214,6 +214,7 @@ class Config(BaseModel):
     music_volume_db: float = -15.0
     blurred_bg_sigma: int = 20
     ken_burns_zoom_rate: float = 0.0015
+    copyright_acknowledgement: str | None = None
 
     # Pivot.7 sub-models
     image_fetch: ImageFetchConfig = Field(default_factory=ImageFetchConfig)

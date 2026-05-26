@@ -91,6 +91,41 @@ def _download_candidate(
     return data, width, height
 
 
+def probe_licensed_image(
+    entity: str,
+    query: str | None,
+    cfg,
+    *,
+    cache_dir: Path | None = None,
+    session: requests.Session | None = None,
+) -> bool:
+    """Return True if licensed sources can satisfy entity (never consults web)."""
+    if_cfg = cfg.image_fetch
+    _reject_living_person(entity, if_cfg.living_person_patterns)
+
+    cache_root = cache_dir or cfg.abs_path(cfg.paths.images_dir)
+    key = _cache_key(entity, query)
+    if _load_cached(cache_root, key) is not None:
+        return True
+
+    http = session or requests.Session()
+    source_names = [n for n in if_cfg.sources if n != "web"]
+    sources = build_sources(
+        source_names,
+        http,
+        serpapi_key=os.environ.get("SERPAPI_KEY"),
+    )
+
+    for source in sources:
+        try:
+            candidates = source.search(entity, query)[: if_cfg.max_candidates_per_source]
+        except Exception:
+            continue
+        if candidates:
+            return True
+    return False
+
+
 def fetch_image(
     entity: str,
     query: str | None,

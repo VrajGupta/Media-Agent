@@ -135,7 +135,7 @@ def check_copyright_acknowledgement(cfg) -> bool:
     ack = getattr(cfg, "copyright_acknowledgement", None)
     if not ack:
         print("  WARN copyright-ack: cfg.copyright_acknowledgement not set "
-              "(movie-clip strike risk unacknowledged)")
+              "(hybrid real-image licensing risk unacknowledged)")
         return True
     return _ok("copyright-ack", f"value={ack!r}")
 

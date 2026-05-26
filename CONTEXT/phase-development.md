@@ -1,7 +1,7 @@
 # Phase: development
 **Project:** Media-Agent (Pivot.6)
 **Status:** in-progress
-**Last updated:** 2026-05-24
+**Last updated:** 2026-05-26
 
 ## Objective
 
@@ -37,6 +37,8 @@ Implement all 10 slices of the Pivot.6 AI-generated pipeline: RSS ingest → top
 - [2026-05-22] **Slice 9 (AI disclosure compliance):** `src/uploader/templater.py` + `src/uploader/insert_body.py` AI-gen branch. `status.containsSyntheticMedia=true` on all `ai_generated` uploads. Commit `f871df8`. Tests green.
 - [2026-05-23] **Slice 10 (First live upload):** Operational plan locked. BLOCKED — two manual unblock steps required before execution.
 
+- [2026-05-26] **Issue 26 (Licensed-only sourcing, ADR-0003):** `shot_plan.resolve_shot_plan` + `probe_licensed_image`; degrade-on-miss before Kling; production config locked.
+
 ## Artifacts
 
 | Artifact | Path | Notes |
@@ -50,7 +52,7 @@ Implement all 10 slices of the Pivot.6 AI-generated pipeline: RSS ingest → top
 | AI gen client | `src/ai_gen/openrouter_kling.py` | OpenRouter Kling 3.0 production provider |
 | Narration | `src/narration/synth.py` | Edge TTS en-US-GuyNeural |
 | Aligner | `src/narration/aligner.py` | Whisper forced-align word timings |
-| Assembler | `src/assembler/build.py` | ffmpeg concat + mux + NVENC 1080×1920 |
+| Assembler | `src/assembler/build.py` + `normalize.py` | Shot normalize → Stitch (xfade/concat filter) → NVENC/libx264 1080×1920 |
 | Subtitles | `src/subtitles/line_ass.py` | Line-at-a-time ASS writer |
 | Shot gen CLI | `scripts/generate_clip.py` | Ad-hoc clip generation |
 | Spike shots | `data/ai_gen_shots/spike_2026-05-21/` | 8 shots — ready for assembler |
@@ -64,9 +66,11 @@ Implement all 10 slices of the Pivot.6 AI-generated pipeline: RSS ingest → top
 - Slice 8 (gen_run) — 2026-05-22, commit `82ce0d1`
 - Slice 9 (compliance refit) — 2026-05-22, commit `f871df8`
 - Slice 10 operational plan — 2026-05-23
+- [issue-22-shot-normalization-tdd](.sessions/2026-05-26__issue-22-shot-normalization-tdd/handoff.md) — 2026-05-26, commit `bca0095`
 
 ## Open Items
 
 - [2026-05-24] Slice 10 uploaded (`9lpL8kuLX08`); T+1h Studio gate + T+48h stability (Issue 13) remain.
 - [2026-05-24] Issue 11 + Issue 14 code shipped; `gen_run.py` unattended weekly run not live-verified.
+- [2026-05-26] **Pivot.7 hybrid spike:** assembly fix shipped; live `scripts/spike_hybrid.py` run + HITL sign-off (Issue 20) pending.
 - Next grill after Slice 10 `[x]`: scripter quality (deferred from 2026-05-23 handoff).

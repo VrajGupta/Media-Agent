@@ -968,11 +968,21 @@ Zero banlist or profanity triggers.
 - [ ] Provenance report per real_image shot (source/license/url).
 - [ ] **HITL sign-off:** real images correct + on-topic, AI shots read as transitions (no synthetic person), Kokoro natural, crossfades smooth.
 
-### P7.7 — Config/retention/compliance/docs cleanup (Issue 21) · AFK · blocked by 20
+### P7.7 — Config/retention/compliance/docs cleanup (Issue 21 + 27) · AFK
 - [x] Lower `per_clip_cost_cents_max` to ~2-shot baseline; re-confirm `daily_spend_cents_ceiling`.
 - [ ] Dry-run uploader still shows `containsSyntheticMedia=true` + "Made with AI." footer.
 - [x] `data/images/` cache TTL in `retention.run_all`.
-- [~] Update `CLAUDE.md`/`agents.md`/`skills.md`/`CONTEXT/` to hybrid model; glossary adds `real_image`/`ai_video` shot kinds + extended living-person rule (`CONTEXT/` done; main docs pending spike sign-off).
+- [x] Update `CLAUDE.md`/`agents.md`/`skills.md`/`CONTEXT/` to hybrid model; glossary adds `real_image`/`ai_video`/`Licensed source`; ADR-0003 documented.
+- [x] `docs/rss_feeds.md` written (Slice 7 deliverable).
 - [x] Config + retention tests green.
+
+### Issue 26 — Licensed-only image sourcing (ADR-0003) · complete
+- [x] `resolve_shot_plan` + `probe_licensed_image`; degrade-on-miss before Kling.
+- [x] Production config: `web_fallback_enabled: false`, licensed-only sources, `copyright_acknowledgement: hybrid_real_image_v1`.
+
+### Deferred perf — CUDA cuBLAS PATH (Whisper CPU fallback)
+Whisper alignment falls back to CPU because `cublas64_12.dll` is not on PATH. Works but slower. **Not blocking.**
+
+Fix steps: (1) confirm CUDA 12.x toolkit installed; (2) add `CUDA\v12.x\bin` to user PATH; (3) verify `where cublas64_12.dll`; (4) re-run one clip and confirm no CPU fallback in logs.
 
 **Acceptance (Pivot.7):** one hybrid Short — real entity images + AI transitions (no synthetic person), natural Kokoro voice, per-clip Kling cost ≈ half the 4-shot baseline, AI disclosure intact, docs updated.

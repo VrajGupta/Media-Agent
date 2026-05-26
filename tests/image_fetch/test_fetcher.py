@@ -12,7 +12,7 @@ import pytest
 from PIL import Image
 
 from src.image_fetch.errors import LivingPersonEntityError, NoImageFoundError
-from src.image_fetch.fetcher import fetch_image
+from src.image_fetch.fetcher import fetch_image, probe_licensed_image
 from src.image_fetch.validation import validate_image_bytes
 
 
@@ -212,4 +212,19 @@ def test_fetch_image_skips_web_when_disabled(tmp_path):
         mock_build.return_value = []
         with pytest.raises(NoImageFoundError):
             fetch_image("OpenAI logo", None, cfg, cache_dir=cache_dir, session=session)
+    assert "web" not in mock_build.call_args[0][0]
+
+
+def test_probe_licensed_image_never_consults_web(tmp_path):
+    cfg = _make_cfg(tmp_path, web_fallback=True)
+    cfg.image_fetch.sources = ["logo", "wikimedia", "openverse", "web"]
+    cache_dir = tmp_path / "cache"
+    session = MagicMock()
+    source = MagicMock()
+    source.search.return_value = [MagicMock(url="https://example.com/logo.png")]
+
+    with patch("src.image_fetch.fetcher.build_sources") as mock_build:
+        mock_build.return_value = [source]
+        assert probe_licensed_image("OpenAI logo", None, cfg, cache_dir=cache_dir, session=session)
+
     assert "web" not in mock_build.call_args[0][0]

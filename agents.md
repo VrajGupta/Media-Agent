@@ -44,6 +44,16 @@ Retired because: no source video to slice. Code + ~55 tests deleted.
 **Rubric (locked, Tech/AI niche):** hook in first 5 words, ~40 words narration, 4 shots × ~4 s each, 1–2 punchy stats, ends on a teaser. Schema validated with pydantic; single retry on validation fail.
 **Failure:** `scripts.status='rejected_policy'` if policy_gate rejects; retry up to `scripter.retry_on_policy_reject`.
 
+## 🆕 `image_fetch/` — Real-image sourcing (Pivot.7)
+**Job:** Resolve **Real-image shot** stills from **Licensed sources** only on the autonomous path (ADR-0003).
+**Sources (production):** `logo` → `wikimedia` → `openverse`. Open web search (`web`) is disabled when `web_fallback_enabled: false`.
+**Outputs:** cached still under `data/images/` + provenance sidecar (source/license/url).
+**Probe:** `probe_licensed_image()` checks cache + licensed sources without consulting web — used by the shot-plan resolver before Kling billing.
+
+## 🆕 `scripter/shot_plan.py` — Licensed shot-plan resolver (Pivot.7, ADR-0003)
+**Job:** Given normalized shots + a licensed probe, return `(final_shots, billable_ai_video_count)`.
+**Behavior:** licensed hit → **Real-image shot** unchanged; licensed miss → degrade to **AI-video shot** before any Kling submission. Wired in `gen_run._generate_clip` ahead of `generate_shots`.
+
 ## 🆕 `ai_gen/` — AI Video Generator Client (NEW Pivot.6)
 **Job:** Submit shot prompts to an AI video generator, poll for completion, download mp4s.
 **Design:** `base.Provider` ABC (`submit`, `poll`, `download`, `last_cost_cents`). **Production impl: `openrouter_kling.OpenRouterKlingClient`** (Kling 3.0 std `kwaivgi/kling-v3.0-std` via OpenRouter REST API, Bearer auth via `OPENROUTER_API_KEY`). `kling.KlingClient` (direct Kling JWT auth) retained as fallback. `pika.PikaClient` / `minimax.MiniMaxClient` / `seedance.SeedanceClient` are ready drop-in slots.

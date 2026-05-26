@@ -43,11 +43,12 @@ from src.assembler.ken_burns import build_ken_burns_argv
 from src.editor.ffmpeg_runner import run_ffmpeg
 from src.editor.music import SUPPORTED_EXTENSIONS
 from src.editor.slug import title_slug
-from src.image_fetch.fetcher import fetch_image
+from src.image_fetch.fetcher import fetch_image, probe_licensed_image
 from src.image_fetch.errors import ImageFetchError
 from src.narration.aligner import align
 from src.narration.synth import synthesize
 from src.scripter.shots import normalize_shots
+from src.scripter.shot_plan import resolve_shot_plan
 from src.subtitles.line_ass import write_line_ass_file
 
 
@@ -204,6 +205,10 @@ def _generate_clip(
     asm_cfg = cfg.assembler
     style_suffix = ai_cfg.style_suffix if ai_cfg.style_suffix else ""
     normalized = normalize_shots(shots_raw)
+    resolved, _billable_ai = resolve_shot_plan(
+        normalized,
+        licensed_probe=lambda entity, query: probe_licensed_image(entity, query, cfg),
+    )
 
     pending_dir = cfg.abs_path(cfg.paths.pending_dir)
     pending_dir.mkdir(parents=True, exist_ok=True)
@@ -223,7 +228,7 @@ def _generate_clip(
             **s,
             "prompt": f"{s['prompt']}, {style_suffix}".strip(", "),
         }
-        for s in normalized
+        for s in resolved
         if s.get("kind") == "ai_video"
     ]
     ai_paths: list[Path] = []
@@ -237,7 +242,7 @@ def _generate_clip(
 
     shot_paths: list[Path] = []
     ai_idx = 0
-    for i, shot in enumerate(normalized):
+    for i, shot in enumerate(resolved):
         if shot.get("kind") == "real_image":
             shot_paths.append(_render_real_image_shot(shot, i, shots_dir, cfg))
         else:
@@ -262,7 +267,7 @@ def _generate_clip(
     with tempfile.TemporaryDirectory(prefix=f"gen_{clip_id}_build_") as tmpdir:
         concat_list = Path(tmpdir) / "concat.txt"
         write_concat_list(shot_paths, concat_list)
-        durations = [float(s.get("duration_s", 4)) for s in normalized]
+        durations = [float(s.get("duration_s", 4)) for s in resolved]
         if asm_cfg.crossfade_enabled and len(shot_paths) > 1:
             total_duration_s = sum(durations) - asm_cfg.crossfade_duration_s * (len(durations) - 1)
         else:
