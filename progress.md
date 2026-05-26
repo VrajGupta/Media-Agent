@@ -962,20 +962,31 @@ Zero banlist or profanity triggers.
 - [x] `assembler.crossfade_enabled` / `crossfade_duration_s` config.
 - [x] ≥6 tests (routing, crossfade argv, regression, failure skip, cost). Mocks for generate_shots/fetch_image/run_ffmpeg. Suite green.
 
-### P7.6 — End-to-end hybrid spike (Issue 20) · Interactive · blocked by 15–19
-- [x] `scripts/spike_hybrid.py` (throwaway): one real topic → tagged shots → route → Kokoro → align → subs → hybrid assemble → `output/pending/`.
-- [x] **Live spike (2026-05-26, topic 82):** `output/pending/__unscheduled__spike-82__it_s_in_the_air_apple_tv_1391.mp4` — 1080×1920@30, ~7.3 MB, exit 0 (~5 min). Script: 2× `real_image` (apple_tv_logo, onlyfans_icon) + 2× `ai_video`; crossfades on; Kokoro + Whisper align OK. Non-fatal Loguru `UnicodeEncodeError` on Windows cp1252 for `→` in ai_gen logs (pipeline did not abort).
-- [ ] Cost recorded to `quota_usage(provider='openrouter')`; ≈ half the 4-shot baseline; reconciled ±10% vs OpenRouter dashboard.
-- [ ] Provenance report per real_image shot (source/license/url).
+### P7.6 — End-to-end hybrid spike (Issue 20) · Interactive
+- [x] `scripts/spike_hybrid.py` (throwaway): one real topic → tagged shots → route → Kokoro → align → subs → hybrid assemble → output/pending/.
+- [x] **Live spike (2026-05-26, topic 82):** `output/pending/2026-05-28__slot_0900__it_s_in_the_air_apple_tv_1391.mp4` (was `__unscheduled__spike-82__…`) — 1080×1920@30, ~7.3 MB, exit 0 (~5 min). Script: 2× `real_image` (apple_tv_logo, onlyfans_icon) + 2× `ai_video`; crossfades on; Kokoro + Whisper align OK.
+- [x] **Cost/provenance reporting** added to `spike_hybrid.py`; OpenRouter quota recording wired in `generate_shots` + `_generate_clip`.
+- [ ] Cost reconciled ±10% vs OpenRouter dashboard (operator step).
+- [ ] Provenance report confirmed by operator (sidecars in `data/images/` for apple_tv_logo + onlyfans_icon).
 - [ ] **HITL sign-off:** real images correct + on-topic, AI shots read as transitions (no synthetic person), Kokoro natural, crossfades smooth.
 
-### P7.7 — Config/retention/compliance/docs cleanup (Issue 21 + 27) · AFK
+### P7.7 — Config/retention/compliance/docs cleanup (Issue 21 + 27) · complete
 - [x] Lower `per_clip_cost_cents_max` to ~2-shot baseline; re-confirm `daily_spend_cents_ceiling`.
-- [ ] Dry-run uploader still shows `containsSyntheticMedia=true` + "Made with AI." footer.
+- [x] Dry-run uploader disclosure verified via `tests/test_uploader_insert_body_ai.py` (`containsSyntheticMedia=true` + "Made with AI." footer).
 - [x] `data/images/` cache TTL in `retention.run_all`.
 - [x] Update `CLAUDE.md`/`agents.md`/`skills.md`/`CONTEXT/` to hybrid model; glossary adds `real_image`/`ai_video`/`Licensed source`; ADR-0003 documented.
 - [x] `docs/rss_feeds.md` written (Slice 7 deliverable).
-- [x] Config + retention tests green.
+- [x] Config + retention tests green; `config.yaml` retention keys aligned to Pivot.7 model.
+
+### Issue 28 — Slice 8 unattended verification (2026-05-26)
+- [x] `gen_run --dry-run --clips 1` completes all stages (zero OpenRouter spend; `_generate_clip` skipped).
+- [x] **Hybrid clip slotted:** spike-82 → `quality_pass` → `2026-05-28__slot_0900__…mp4` at 1080×1920@30; `publish_at_utc=2026-05-28T01:00:00Z` (Thu 09:00 Asia/Singapore).
+- [x] `gen_run` fixes: Ollama scripter wiring, policy_gate call, retention config compat, clip DB persistence, pending-script backlog fallback, pre-flight cost guard, `quality_screen` ai_generated path (skip transcript/density/confidence; min duration 15 s).
+- [ ] Full unattended `gen_run --clips 1` end-to-end clip generation (live run hit cost ceiling when all `real_image` shots degraded to 4× Kling on script `ff46a483` — pre-flight guard added to prevent re-bill).
+
+### Issue 29 — First hybrid ship (two-gate) · blocked on operator
+- [ ] Drag slotted clip `output/pending/2026-05-28__slot_0900__…mp4` → `output/approved/` for upload on slot day.
+- [ ] Ship gate T+1h + stability gate T+48h per ADR-0001.
 
 ### Issue 26 — Licensed-only image sourcing (ADR-0003) · complete
 - [x] `resolve_shot_plan` + `probe_licensed_image`; degrade-on-miss before Kling.

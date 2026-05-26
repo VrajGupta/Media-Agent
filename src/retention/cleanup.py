@@ -98,7 +98,7 @@ def list_raw_candidates(
     raw_dir = cfg.abs_path(cfg.paths.raw_dir)
     if not raw_dir.exists():
         return []
-    threshold_days = int(cfg.retention.raw_video)
+    threshold_days = int(getattr(cfg.retention, "raw_video", 14))
     candidates: List[str] = []
     for f in raw_dir.glob("*.mp4"):
         if _file_age_days(f, now=now) < threshold_days:
@@ -124,7 +124,7 @@ def list_transcript_candidates(
     transcripts_dir = cfg.abs_path(cfg.paths.transcripts_dir)
     if not transcripts_dir.exists():
         return []
-    threshold_days = int(cfg.retention.transcript)
+    threshold_days = int(getattr(cfg.retention, "transcript", 90))
     return [
         str(f) for f in transcripts_dir.glob("*.json")
         if _file_age_days(f, now=now) >= threshold_days

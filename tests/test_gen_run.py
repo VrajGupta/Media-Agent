@@ -88,6 +88,7 @@ class _GenStubConfig:
         self.timezone = "Asia/Singapore"
         self.human_review = True
         self.output_resolution = [1080, 1920]
+        self.ollama_model = "qwen2.5:3b-instruct"
         self.output_fps = 30
         self.nvenc_preset = "p5"
         self.nvenc_cq = 23

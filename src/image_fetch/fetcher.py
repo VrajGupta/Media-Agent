@@ -126,6 +126,18 @@ def probe_licensed_image(
     return False
 
 
+def provenance_for_entity(
+    entity: str,
+    query: str | None,
+    cfg,
+    *,
+    cache_dir: Path | None = None,
+) -> ImageAsset | None:
+    """Return cached provenance for entity without network I/O."""
+    cache_root = cache_dir or cfg.abs_path(cfg.paths.images_dir)
+    return _load_cached(cache_root, _cache_key(entity, query))
+
+
 def fetch_image(
     entity: str,
     query: str | None,

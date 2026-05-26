@@ -555,23 +555,32 @@ class Repository:
 
     # ---- quota (absorbed from QuotaLedger) ----
 
-    def quota_record(self, endpoint: str, units: int) -> None:
+    def quota_record(
+        self, endpoint: str, units: int, *, provider: str = "youtube",
+    ) -> None:
         """Record quota usage for today (UTC)."""
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self.conn.execute(
-            "INSERT INTO quota_usage (date, endpoint, units) VALUES (?, ?, ?)",
-            (today, endpoint, int(units)),
+            "INSERT INTO quota_usage (date, endpoint, units, provider) VALUES (?, ?, ?, ?)",
+            (today, endpoint, int(units), provider),
         )
 
-    def quota_today_total(self) -> int:
-        """Sum of all units recorded today (UTC)."""
+    def quota_today_total(self, *, provider: str | None = None) -> int:
+        """Sum of all units recorded today (UTC), optionally filtered by provider."""
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        row = self.conn.execute(
-            "SELECT COALESCE(SUM(units), 0) AS s FROM quota_usage WHERE date=?",
-            (today,),
-        ).fetchone()
+        if provider is None:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(units), 0) AS s FROM quota_usage WHERE date=?",
+                (today,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(units), 0) AS s FROM quota_usage "
+                "WHERE date=? AND provider=?",
+                (today, provider),
+            ).fetchone()
         return int(row["s"]) if row else 0
 
     def quota_would_exceed(self, units: int, ceiling: int) -> bool:
@@ -681,6 +690,14 @@ class Repository:
         return self.conn.execute(
             "SELECT * FROM scripts WHERE script_id=?", (script_id,)
         ).fetchone()
+
+    def pending_scripts(self, limit: int = 2) -> list[sqlite3.Row]:
+        """Return highest-scoring pending scripts not yet rendered."""
+        return self.conn.execute(
+            "SELECT * FROM scripts WHERE status='pending' "
+            "ORDER BY quality_score DESC NULLS LAST LIMIT ?",
+            (limit,),
+        ).fetchall()
 
     def update_script_status(
         self,

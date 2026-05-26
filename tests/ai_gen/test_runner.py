@@ -63,3 +63,24 @@ def test_generate_shots_submit_uses_aspect_ratio(tmp_path):
     generate_shots([SHOTS[0]], tmp_path, client, aspect_ratio="16:9")
     _, kwargs = client.submit.call_args
     assert kwargs["aspect_ratio"] == "16:9"
+
+
+def test_generate_shots_records_openrouter_quota(tmp_path):
+    from src.state import connect, initialize_schema
+    from src.state.repository import Repository
+
+    db = tmp_path / "state.db"
+    conn = connect(db)
+    initialize_schema(conn)
+    repo = Repository(conn)
+
+    client = _make_client([GenerationStatus.SUCCEEDED])
+    client.wait_for_completion.side_effect = [
+        ShotResult(
+            "ext_0", GenerationStatus.SUCCEEDED,
+            download_url="https://cdn.example.com/v.mp4",
+            cost_cents=67,
+        ),
+    ]
+    generate_shots([SHOTS[0]], tmp_path, client, repo=repo)
+    assert repo.quota_today_total(provider="openrouter") == 67

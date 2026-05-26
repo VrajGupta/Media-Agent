@@ -146,8 +146,9 @@ topic_ingest:
 
 # --- Retention (days) ---
 retention:
-  raw_video: 14
-  transcript: 90
+  ai_gen_shots: 7
+  narration: 14
+  scripts: 90
   output_post_upload: 7
   rejected_clips: 30
   dup_hashes: 90

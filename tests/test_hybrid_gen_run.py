@@ -77,7 +77,11 @@ def test_generate_clip_routes_only_ai_video_to_kling(tmp_path):
         output_path.write_bytes(b"assembled")
         return MagicMock(returncode=0, output_size_bytes=100)
 
-    with patch("src.gen_run.generate_shots", return_value=[fake_shot, fake_shot]) as p_gen, \
+    def _fake_gen(shots, *args, **kwargs):
+        return [fake_shot] * len(shots)
+
+    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+         patch("src.gen_run.generate_shots", side_effect=_fake_gen) as p_gen, \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot) as p_kb, \
          patch("src.gen_run.synthesize"), \
          patch("src.gen_run.align", return_value=[]), \
@@ -141,7 +145,11 @@ def test_generate_clip_logs_stderr_on_assembly_failure(tmp_path):
             output_size_bytes=0,
         )
 
-    with patch("src.gen_run.generate_shots", return_value=[fake_shot, fake_shot]), \
+    def _fake_gen(shots, *args, **kwargs):
+        return [fake_shot] * len(shots)
+
+    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+         patch("src.gen_run.generate_shots", side_effect=_fake_gen), \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
          patch("src.gen_run.synthesize"), \
          patch("src.gen_run.align", return_value=[]), \
@@ -182,7 +190,11 @@ def test_generate_clip_retries_libx264_on_encoder_failure(tmp_path):
         output_path.write_bytes(b"assembled")
         return MagicMock(returncode=0, stderr="", output_size_bytes=100)
 
-    with patch("src.gen_run.generate_shots", return_value=[fake_shot, fake_shot]), \
+    def _fake_gen(shots, *args, **kwargs):
+        return [fake_shot] * len(shots)
+
+    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+         patch("src.gen_run.generate_shots", side_effect=_fake_gen), \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
          patch("src.gen_run.synthesize"), \
          patch("src.gen_run.align", return_value=[]), \
@@ -214,7 +226,11 @@ def test_generate_clip_does_not_retry_on_filtergraph_failure(tmp_path):
             output_size_bytes=0,
         )
 
-    with patch("src.gen_run.generate_shots", return_value=[fake_shot, fake_shot]), \
+    def _fake_gen(shots, *args, **kwargs):
+        return [fake_shot] * len(shots)
+
+    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+         patch("src.gen_run.generate_shots", side_effect=_fake_gen), \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
          patch("src.gen_run.synthesize"), \
          patch("src.gen_run.align", return_value=[]), \

@@ -21,6 +21,11 @@ def probe_duration(path: Path) -> Optional[float]:
     return ffprobe_duration_seconds(path)
 
 
-def passes_duration(duration_s: float) -> tuple[bool, float]:
+def passes_duration(
+    duration_s: float,
+    *,
+    min_s: float = CLIP_MIN_SECONDS,
+    max_s: float = CLIP_MAX_SECONDS,
+) -> tuple[bool, float]:
     """In-range check. Caller computes duration via probe_duration first."""
-    return (CLIP_MIN_SECONDS <= duration_s <= CLIP_MAX_SECONDS, duration_s)
+    return (min_s <= duration_s <= max_s, duration_s)

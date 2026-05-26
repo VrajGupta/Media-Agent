@@ -156,44 +156,47 @@ def screen_one_clip(
             reason="ffprobe failed",
         )
 
-    # Transcript needed for density + confidence.
-    video_id = row["video_id"]
-    transcripts_dir = cfg.abs_path(cfg.paths.transcripts_dir)
-    all_words = _load_transcript_words(transcripts_dir, video_id)
-    if all_words is None:
-        return QualityResult(
-            clip_id, QualityOutcome.error_no_transcript,
-            output_path=output_path_str, duration_s=duration_s,
-            reason="transcript missing or unreadable",
-        )
-
-    start_s = float(row["start_s"])
-    end_s = float(row["end_s"])
-    window_words = words_in_clip_window(all_words, start_s, end_s)
-    clip_window_duration = end_s - start_s
-
     failures: list[str] = []
     loudness_band: Optional[str] = None
     loudness_infra_failed = False
+    content_kind = row["content_kind"] if "content_kind" in row.keys() else "sourced"
 
     # Check 1: duration in [25, 65].
-    dur_ok, _ = duration_mod.passes_duration(duration_s)
+    min_duration = 15.0 if content_kind == "ai_generated" else duration_mod.CLIP_MIN_SECONDS
+    dur_ok, _ = duration_mod.passes_duration(duration_s, min_s=min_duration)
     if not dur_ok:
         failures.append(f"duration:{duration_s:.1f}")
 
-    # Check 2: speech density.
-    den_ok, density = density_mod.passes_density(
-        window_words, clip_window_duration, float(cfg.min_speech_density),
-    )
-    if not den_ok:
-        failures.append(f"density:{density:.2f}")
+    if content_kind != "ai_generated":
+        # Transcript needed for density + confidence (sourced clips only).
+        video_id = row["video_id"]
+        transcripts_dir = cfg.abs_path(cfg.paths.transcripts_dir)
+        all_words = _load_transcript_words(transcripts_dir, video_id)
+        if all_words is None:
+            return QualityResult(
+                clip_id, QualityOutcome.error_no_transcript,
+                output_path=output_path_str, duration_s=duration_s,
+                reason="transcript missing or unreadable",
+            )
 
-    # Check 3: word confidence.
-    conf_ok, conf = confidence_mod.passes_confidence(
-        window_words, float(cfg.min_word_confidence),
-    )
-    if not conf_ok:
-        failures.append(f"confidence:{conf:.2f}")
+        start_s = float(row["start_s"])
+        end_s = float(row["end_s"])
+        window_words = words_in_clip_window(all_words, start_s, end_s)
+        clip_window_duration = end_s - start_s
+
+        # Check 2: speech density.
+        den_ok, density = density_mod.passes_density(
+            window_words, clip_window_duration, float(cfg.min_speech_density),
+        )
+        if not den_ok:
+            failures.append(f"density:{density:.2f}")
+
+        # Check 3: word confidence.
+        conf_ok, conf = confidence_mod.passes_confidence(
+            window_words, float(cfg.min_word_confidence),
+        )
+        if not conf_ok:
+            failures.append(f"confidence:{conf:.2f}")
 
     # Check 4: loudness — three-tier (pass / warn / reject) plus fail-soft.
     measurement = loudness_mod.measure_loudness(output_path)

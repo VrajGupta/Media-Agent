@@ -32,6 +32,12 @@ from src.state import Repository, connect
 # Stage imports — imported into this namespace so tests can patch at src.gen_run.*
 from src.topic_ingest.runner import fetch_unscripted_topics
 from src.scripter.runner import run_stage_a, run_stage_b, run_stage_c
+from src.scripter.ollama_fns import (
+    make_script_generator,
+    make_script_scorer,
+    make_topic_scorer,
+    make_topic_tagger,
+)
 
 from src import policy_gate, quality_screen, slot_planner, retention
 
@@ -84,6 +90,43 @@ def _build_runs_md_summary(summary: dict) -> str:
 def count_ai_video_shots(shots: list[dict]) -> int:
     """Count ai_video shots for cost projection."""
     return sum(1 for s in shots if s.get("kind") == "ai_video")
+
+
+def _script_dict_from_row(row) -> dict:
+    script = dict(row)
+    script["shots"] = json.loads(script["shots_json"])
+    return script
+
+
+def _pending_scripts_for_render(repo: Repository, limit: int) -> list[dict]:
+    return [_script_dict_from_row(r) for r in repo.pending_scripts(limit)]
+
+
+def _persist_rendered_clip(
+    repo: Repository,
+    script: dict,
+    output_path: Path,
+    *,
+    duration_s: float,
+) -> None:
+    narration = script.get("narration", "")
+    words = narration.strip().split()
+    hook = " ".join(words[:5]) if words else script["title"]
+    clip_id = script["script_id"]
+    repo.insert_clip(
+        clip_id=clip_id,
+        video_id=None,
+        start_s=0.0,
+        end_s=float(duration_s),
+        hook=hook,
+        suggested_title=script["title"],
+        title_slug=title_slug(script["title"], clip_id),
+        selection_method="ai_generated",
+        content_kind="ai_generated",
+        script_id=clip_id,
+        status="rendered",
+        output_path=str(output_path),
+    )
 
 
 _ENCODER_FAILURE_MARKERS = (
@@ -205,10 +248,17 @@ def _generate_clip(
     asm_cfg = cfg.assembler
     style_suffix = ai_cfg.style_suffix if ai_cfg.style_suffix else ""
     normalized = normalize_shots(shots_raw)
-    resolved, _billable_ai = resolve_shot_plan(
+    resolved, billable_ai = resolve_shot_plan(
         normalized,
         licensed_probe=lambda entity, query: probe_licensed_image(entity, query, cfg),
     )
+
+    if billable_ai * 67 > ai_cfg.per_clip_cost_cents_max and billable_ai > 0:
+        raise RuntimeError(
+            f"clip {clip_id} projected OpenRouter cost "
+            f"{billable_ai * 67}c exceeds per_clip_cost_cents_max="
+            f"{ai_cfg.per_clip_cost_cents_max} ({billable_ai} ai_video shots)"
+        )
 
     pending_dir = cfg.abs_path(cfg.paths.pending_dir)
     pending_dir.mkdir(parents=True, exist_ok=True)
@@ -236,9 +286,27 @@ def _generate_clip(
         if not openrouter_api_key:
             raise RuntimeError("OPENROUTER_API_KEY required for ai_video shots")
         client = OpenRouterKlingClient(api_key=openrouter_api_key)
-        ai_paths = generate_shots(
-            ai_shots, shots_dir, client, max_concurrent=ai_cfg.max_concurrent,
+        track_quota = isinstance(repo, Repository)
+        openrouter_before = (
+            repo.quota_today_total(provider="openrouter") if track_quota else 0
         )
+        ai_paths = generate_shots(
+            ai_shots, shots_dir, client,
+            max_concurrent=ai_cfg.max_concurrent,
+            repo=repo if track_quota else None,
+        )
+        if track_quota:
+            clip_cost = repo.quota_today_total(provider="openrouter") - openrouter_before
+            if clip_cost > ai_cfg.per_clip_cost_cents_max:
+                raise RuntimeError(
+                    f"clip {clip_id} OpenRouter cost {clip_cost}c exceeds "
+                    f"per_clip_cost_cents_max={ai_cfg.per_clip_cost_cents_max}"
+                )
+            if repo.quota_today_total(provider="openrouter") > ai_cfg.daily_spend_cents_ceiling:
+                raise RuntimeError(
+                    f"daily OpenRouter spend exceeds ceiling "
+                    f"{ai_cfg.daily_spend_cents_ceiling}c"
+                )
 
     shot_paths: list[Path] = []
     ai_idx = 0
@@ -355,32 +423,79 @@ def run_generation(
         summary["stages"]["topic_ingest"] = _summarize(topics)
 
         logger.info("gen_run: stage=scripter_a")
-        topics_scored = run_stage_a(cfg, repo)
+        if dry_run:
+            topics_scored = run_stage_a(cfg, repo, scorer_fn=None, tagger_fn=None)
+        else:
+            model = cfg.ollama_model
+            topics_scored = run_stage_a(
+                cfg, repo,
+                scorer_fn=make_topic_scorer(model),
+                tagger_fn=make_topic_tagger(model),
+            )
         summary["stages"]["scripter_a"] = _summarize(topics_scored)
 
         logger.info("gen_run: stage=scripter_b")
-        scripts = run_stage_b(cfg, repo, topics_scored)
+        if dry_run:
+            scripts = run_stage_b(cfg, repo, topics_scored, generator_fn=None)
+        else:
+            scripts = run_stage_b(
+                cfg, repo, topics_scored,
+                generator_fn=make_script_generator(cfg.ollama_model),
+            )
         summary["stages"]["scripter_b"] = _summarize(scripts)
 
         logger.info("gen_run: stage=scripter_c")
-        selected = run_stage_c(cfg, repo, scripts)[:clips_n]
+        if dry_run:
+            selected = run_stage_c(cfg, repo, scripts, scorer_fn=None)[:clips_n]
+        else:
+            selected = run_stage_c(
+                cfg, repo, scripts,
+                scorer_fn=make_script_scorer(cfg.ollama_model),
+            )[:clips_n]
         summary["stages"]["scripter_c"] = _summarize(selected)
+
+        if not selected and not dry_run:
+            selected = _pending_scripts_for_render(repo, clips_n)
+            if selected:
+                logger.info(
+                    "gen_run: stage_c returned 0; using {} pending script(s) from backlog",
+                    len(selected),
+                )
 
         # --- Per-script: policy gate, then generate clip ---
         logger.info("gen_run: stage=policy_gate")
-        gate_results = policy_gate.run_all(
-            repo, cfg, dry_run=dry_run, ollama_host=ollama_host,
-        )
+        gate_results = policy_gate.run_all(repo, cfg, dry_run=dry_run)
         summary["stages"]["policy_gate"] = _summarize(gate_results)
 
         clips_generated = 0
         for script in selected:
             try:
-                _generate_clip(
+                shots_raw = script.get("shots", [])
+                normalized = normalize_shots(shots_raw)
+                resolved, _ = resolve_shot_plan(
+                    normalized,
+                    licensed_probe=lambda entity, query: probe_licensed_image(
+                        entity, query, cfg,
+                    ),
+                )
+                durations = [float(s.get("duration_s", 4)) for s in resolved]
+                asm_cfg = cfg.assembler
+                if asm_cfg.crossfade_enabled and len(resolved) > 1:
+                    duration_s = sum(durations) - asm_cfg.crossfade_duration_s * (
+                        len(durations) - 1
+                    )
+                else:
+                    duration_s = sum(durations)
+
+                out = _generate_clip(
                     script, cfg, repo,
                     openrouter_api_key=openrouter_api_key,
                     dry_run=dry_run,
                 )
+                if out and not dry_run:
+                    _persist_rendered_clip(
+                        repo, script, out, duration_s=duration_s,
+                    )
                 clips_generated += 1
             except ImageFetchError as exc:
                 logger.error(

@@ -36,6 +36,7 @@ def generate_shots(
     poll_interval_s: int = 15,
     timeout_s: int = 600,
     max_concurrent: int = 2,
+    repo=None,
 ) -> list[Path]:
     """Submit all shots, poll until done, download mp4s, return ordered paths.
 
@@ -60,6 +61,13 @@ def generate_shots(
     if failed:
         errs = "; ".join(f"shot {j.index}: {j.error}" for j in failed)
         raise RuntimeError(f"generate_shots: {len(failed)} shot(s) failed — {errs}")
+
+    if repo is not None:
+        for job in jobs:
+            if job.cost_cents:
+                repo.quota_record(
+                    "openrouter", job.cost_cents, provider="openrouter",
+                )
 
     return [j.output_path for j in jobs]  # type: ignore[return-value]
 
