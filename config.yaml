@@ -112,7 +112,7 @@ videos_list_unit_cost: 1
 # Top up OPENROUTER_API_KEY before running ai_gen slice.
 ai_gen:
   model: "kwaivgi/kling-v3.0-std"
-  per_clip_cost_cents_max: 100        # ~2 Kling shots/clip (~$0.67) + headroom
+  per_clip_cost_cents_max: 270        # ~4 Kling shots when licensed real_image misses degrade
   daily_spend_cents_ceiling: 500      # $5.00/day ceiling
 
 narration:
