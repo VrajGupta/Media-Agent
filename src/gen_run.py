@@ -216,7 +216,10 @@ def _render_real_image_shot(
         duration_s=float(shot.get("duration_s", 4)),
         resolution=tuple(cfg.output_resolution),
         zoom_rate=float(getattr(cfg, "ken_burns_zoom_rate", 0.0015)),
-        blurred_bg_sigma=int(getattr(cfg, "blurred_bg_sigma", 20)),
+        gradient_luma_max=int(getattr(cfg, "ken_burns_gradient_luma_max", 45)),
+        gradient_saturation_max=float(
+            getattr(cfg, "ken_burns_gradient_saturation_max", 0.35)
+        ),
         nvenc_preset=cfg.nvenc_preset,
         nvenc_cq=int(cfg.nvenc_cq),
     )

@@ -34,25 +34,27 @@ def _chat_json(model: str, prompt: str) -> dict:
 # ---------------------------------------------------------------------------
 
 _TOPIC_SCORE_PROMPT = """\
-Score this tech/AI news topic for a YouTube Shorts channel targeting tech enthusiasts.
+Score this tech/AI news topic for a YouTube Shorts channel targeting AI-centric news.
 
 Title: {title}
 Summary: {summary}
 
-Rate each dimension strictly 1-10 (integers):
-- novelty: Is this breaking/surprising? (1=old news, 10=never seen before)
-- specificity: Is it concrete with real names/numbers? (1=vague, 10=highly specific)
-- tension: Conflict, stakes, or drama? (1=boring, 10=explosive)
-- reason: One sentence explaining the scores
+Rate significance strictly 1-10 (integer):
+- significance: How major is this launch or announcement? Consider model/research releases,
+  AI shipping in products, and flagship hardware/OS launches as high significance.
+  Culture, entertainment, lawsuits, minor patches, and startup funding rounds are low.
+
+Also provide:
+- reason: One sentence explaining the score
 
 Score guidance:
-1-3 = off-topic, boring, or a coupon/deal/promo article
-4-6 = minor update, vague, or low stakes
-7-8 = solid tech news with clear impact
-9-10 = breaking, highly specific, dramatic stakes
+1-3 = off-niche, minor/incremental, or low-impact
+4-6 = moderate update with limited reach
+7-8 = solid launch from a known player
+9-10 = major frontier model, flagship device/OS, or industry-shifting release
 
 Respond ONLY with valid JSON (use real scores, not placeholders):
-{{"novelty": <int 1-10>, "specificity": <int 1-10>, "tension": <int 1-10>, "reason": "one sentence"}}
+{{"significance": <int 1-10>, "reason": "one sentence"}}
 """
 
 
@@ -62,16 +64,16 @@ def make_topic_scorer(model: str) -> Callable:
             title=title, summary=summary or "N/A"
         )
         data = _chat_json(model, prompt)
+
         def _score(key: str) -> float:
             v = data.get(key, 5)
             try:
                 return float(v)
             except (TypeError, ValueError):
                 return 5.0
+
         return {
-            "novelty": _score("novelty"),
-            "specificity": _score("specificity"),
-            "tension": _score("tension"),
+            "significance": _score("significance"),
             "reason": str(data.get("reason", "")),
         }
     return _fn

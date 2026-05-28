@@ -6,6 +6,9 @@ where the work is at a glance.
 
 | Date | Session folder | Summary | Next action |
 |---|---|---|---|
+| 2026-05-28 | [adr-0004-dry-run-handoff](2026-05-28__adr-0004-dry-run-handoff/handoff.md) | ADR-0004 shipped + `gen_run --dry-run --clips 1` OK; no upload | Live `python -m src.gen_run --clips 1` → review MP4 in `output/pending/` |
+| 2026-05-27 | [issue-33-ken-burns-tdd](2026-05-27__issue-33-ken-burns-tdd/handoff.md) | TDD Issues 30–34 complete (ADR-0004 refit) | *(superseded by dry-run handoff above)* |
+| 2026-05-27 | [ai-niche-and-photo-framing](2026-05-27__ai-niche-and-photo-framing/handoff.md) | Diagnosed OnlyFans clip + stretched photo; grill → ADR-0004, PRD, Issues 30–34 | *(superseded by TDD session above for 31+33)* |
 | 2026-05-26 | [issues-26-27-finish-line](2026-05-26__issues-26-27-finish-line/handoff.md) | Issue 26 licensed-only sourcing (ADR-0003) + Issue 27 doc housekeeping | Live `spike_hybrid.py`; commit 2 pending spike files; then Issue 28 |
 | 2026-05-26 | [finish-line-roadmap](2026-05-26__finish-line-roadmap/handoff.md) | Roadmap-to-done grill; PRD + Issues 26–29 | *(superseded by 26–27 implementation)* |
 | 2026-05-26 | [issue-22-shot-normalization-tdd](2026-05-26__issue-22-shot-normalization-tdd/handoff.md) | Issue 22 TDD fix shipped (`bca0095`); normalize.py + mixed-res tests; Issues 23–25 bundled | Run live `spike_hybrid.py` + ffprobe 1080×1920; commit 3 uncommitted files |

@@ -35,6 +35,11 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 - **[2026-05-26] Hybrid is the default content path** — a Clip stays `ai_generated`; "hybrid" is the per-Shot mix (~2 real_image + ~2 ai_video). No toggle, no schema change.
 - **[2026-05-26, ADR-0003] Licensed-only image sourcing for the autonomous path** — `web_fallback_enabled: false`, `sources: [logo, wikimedia, openverse]`; on licensed miss, degrade the real_image shot to ai_video before billing; web fallback stays for the manual spike/dev. `copyright_acknowledgement` → `hybrid_real_image_v1`.
 - **[2026-05-26] First hybrid ship = first live ship under ADR-0001** (two-gate), because real_image sourcing is a new external-content surface even though `Content kind` is unchanged.
+- **[2026-05-27, ADR-0004] Niche sharpened from broad "Tech/AI news" → AI-centric + flagship launches.** On-niche = center of gravity is AI (model/research release, or AI in a product) OR a major flagship hardware/OS launch (new iPhone, major iOS version, flagship GPU). Culture, entertainment, lawsuits/drama, minor tech are off-niche. Supersedes the broad niche line above.
+- **[2026-05-27, ADR-0004] Hard relevance gate at ingest** — an LLM on/off-niche verdict drops off-niche topics *before* the `topics` insert (reject-before-persist + one debug log line). Closes the gap that let Topic #82 (OnlyFans) through.
+- **[2026-05-27, ADR-0004] Topic selection = Significance × source-authority + Hacker News trending corroboration**, replacing the `novelty/specificity/tension` scorer (which rewarded "weird"; scored the OnlyFans story 6.9). HN is keyless/free; degrades gracefully.
+- **[2026-05-27, ADR-0004] Feeds curated to AI-focused** — add Anthropic + Google AI; swap Verge/Ars main → AI subfeeds; keep OpenAI/DeepMind/HF; drop VentureBeat. Supersedes the 7-feed list above.
+- **[2026-05-27] Real-image framing = true-aspect photo + slow zoom over a per-photo dominant-color gradient** (dark-clamped for white-subtitle contrast). Replaces blurred-bg fill and fixes the `zoompan s=WxH` stretch bug. (PRD, not ADR — bug fix + aesthetic.)
 
 ## Accomplishments
 
@@ -50,6 +55,7 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 - [2026-05-24] /to-prd published Slice 11 cadence PRD; amended stale Slice 10 PRD + Issues 11/12.
 - [2026-05-24] /to-issues published Issue 14 (weekday cadence allowlist, AFK, no blockers).
 - [2026-05-26] /grill-with-docs → /to-prd → /to-issues: locked the finish-line roadmap ("done" def + 7 milestones), ADR-0003 (licensed-only sourcing), glossary (Hybrid clip / Licensed source); published PRD `finish-line-autonomous-hybrid` + Issues 26–29.
+- [2026-05-27] /grill-with-docs → /to-prd → /to-issues: root-caused the OnlyFans clip (Topic #82) + stretched photo (zoompan bug); locked ADR-0004 (AI-centric niche, ingest gate, significance+HN selection); sharpened glossary (Topic / Significance / Trending corroboration); published PRD `ai-niche-trending-selection-and-photo-framing` + Issues 30–34. No code written.
 
 ## Artifacts
 
@@ -66,6 +72,8 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 | Grill record (finish line) | `CONTEXT/Grilling/2026-05-26-finish-line-roadmap.md` | "Done" def + 7 milestones |
 | ADR-0003 | `docs/adr/0003-licensed-only-image-sourcing-for-autonomous-ships.md` | Licensed-only image sourcing |
 | Finish-line PRD | `docs/prds/finish-line-autonomous-hybrid.md` | Issues 26–29; `ready-for-agent` |
+| ADR-0004 | `docs/adr/0004-ai-centric-niche-and-ingest-relevance-gate.md` | AI-centric niche + ingest gate + significance/HN |
+| AI-niche PRD | `docs/prds/ai-niche-trending-selection-and-photo-framing.md` | Issues 30–34; `ready-for-agent` |
 
 ## Sessions
 
@@ -74,9 +82,11 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 - Slice 10 operational plan grilling (2026-05-23)
 - Slice 10 refine + Slice 11 cadence (2026-05-24) — `.sessions/2026-05-24__slice-10-refine-slice-11-cadence/handoff.md`
 - Finish-line roadmap (2026-05-26) — `.sessions/2026-05-26__finish-line-roadmap/handoff.md`
+- AI-niche + photo framing (2026-05-27) — `.sessions/2026-05-27__ai-niche-and-photo-framing/handoff.md`
 
 ## Open Items
 
 - ~~Slice 10 not yet ship-verified~~ — clip live (`9lpL8kuLX08`); T+1h/T+48h boxes elapsed, confirm-and-tick (Issues 12/13).
 - ~~Slice 11 PRD/Issue 14 not implemented~~ — code shipped (`[~]`); live-verify folded into Issue 29.
 - **Finish line (Issues 26–29) not started.** Path to "done": Issue 26 (licensed-only sourcing, AFK) + Issue 20 (live spike, HITL) → Issue 28 (unattended `gen_run` verify) → Issue 29 (first hybrid ship, two-gate). Issue 27 (housekeeping) is independent AFK.
+- **AI-niche refit (Issues 30–34) shipped (2026-05-27).** Live-verify next `gen_run` for on-niche topics + Ken Burns framing. `spike-82` rejected manually; code/docs reconciled.

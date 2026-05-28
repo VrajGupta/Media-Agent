@@ -1,7 +1,7 @@
 # Phase: testing
 **Project:** Media-Agent (Pivot.6)
 **Status:** in-progress
-**Last updated:** 2026-05-26
+**Last updated:** 2026-05-27
 
 ## Objective
 
@@ -32,6 +32,8 @@ Maintain a comprehensive test suite that covers all pipeline modules. Tests must
 - [2026-05-22] Slice 9 tests — uploader templater AI-gen branch.
 - [2026-05-09] Phase 7 hardening — run_lock, retention, alerts, runs_writer tests added.
 - [2026-05-09] Phase 4.5 — policy_gate (4 checks + pure evaluator) + quality_screen (6 gates) tests.
+- [2026-05-27] Issue 33 — 8 Ken Burns argv/pure-helper tests (`tests/assembler/test_ken_burns.py`).
+- [2026-05-27] Issue 31 — 5 niche-gate unit + 2 ingest integration tests.
 
 ## Artifacts
 

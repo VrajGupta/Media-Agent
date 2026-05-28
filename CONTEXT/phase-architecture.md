@@ -22,6 +22,7 @@ Design the database schema, configuration model, DAL layer, and module boundarie
 - **Provider ABC** — `ai_gen/base.py` defines `Provider` interface. `OpenRouterKlingClient` is production; `KlingClient` is fallback (API blocked on direct auth). Swappable without changing orchestrator.
 - **Module deprecation pattern** — `discovery/`, `downloader/`, `lang_detect/`, `selector/` retained as dead code for regression safety. Not called by any Pivot.6 path. Tests still run.
 - **[Pivot.7, ADR-0002] Canonical shot normalization in the assembler** — every **Shot** is conformed to one canonical format (**1080×1920, 30fps, yuv420p, SAR 1:1**, resolution from `cfg.output_resolution`) inside the filtergraph before it is **Stitched**. Kling std actually emits 720×1280@24 (CLAUDE.md's "native 1080×1920" was wrong); Ken Burns is 1080×1920@30. Without normalization, `xfade` (and the concat demuxer) fail on the mismatch (`err -22` / rc 4294967274). Normalization lives in a pure deep module (`src/assembler/normalize.py`); the crossfade-off path uses the concat *filter* (not the demuxer) on normalized inputs; all Clips canonicalize (pure-AI too).
+- **[2026-05-27, ADR-0004] AI-centric niche + ingest relevance gate + significance/HN selection.** Niche narrowed to AI-centric + flagship launches; a hard LLM on/off-niche gate runs in `topic_ingest` *before* the `topics` insert (reject-before-persist); topic ranking moves from `novelty/specificity/tension` to **Significance × source-authority + Hacker-News trending corroboration** (keyless, graceful degrade). No schema change (rejection pre-persist; reuses `topic_score_json`/`weighted_score`). New deep seams: `classify_niche` (Ollama, mocked), `fetch_hn_front_page` + pure `hn_corroboration`. Decomposed into Issues 30–34.
 
 ## Accomplishments
 
@@ -32,6 +33,7 @@ Design the database schema, configuration model, DAL layer, and module boundarie
 - [2026-05-20] `src/scripter/ollama_fns.py` — 4 callable factories wired to DI slots in runner.py.
 - [2026-05-22] `src/gen_run.py` — orchestrator module with per-stage lambda pipeline and unified error handling.
 - [2026-05-26] Issue 22 implemented (`bca0095`): `src/assembler/normalize.py` + normalized filtergraph in `build.py`. ADR-0002 now live in code.
+- [2026-05-27] ADR-0004 authored (planning only, not yet in code): AI-centric niche, ingest relevance gate, significance/HN topic selection. Issues 30–34 published `ready-for-agent`.
 
 ## Artifacts
 

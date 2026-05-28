@@ -37,10 +37,11 @@ def _make_cfg(tmp_path, *, categories=None, quality_floor=6.0, candidate_pool_si
         categories=cats,
         candidate_pool_size=candidate_pool_size,
         quality_floor=quality_floor,
-        topic_score_weights=SimpleNamespace(novelty=0.4, specificity=0.3, tension=0.3),
+        source_authority={"*": 1.0},
     )
     return SimpleNamespace(
         scripter=s,
+        topic_ingest=SimpleNamespace(hn=SimpleNamespace(enabled=False)),
         paths=SimpleNamespace(logs_dir="logs"),
         abs_path=lambda rel: tmp_path / rel,
     )
@@ -53,15 +54,14 @@ def _topic(id_, title, category=None, weighted_score=None):
         t["category"] = category
     if weighted_score is not None:
         t["weighted_score"] = weighted_score
-        t["topic_score_json"] = json.dumps({"novelty": 7, "specificity": 7, "tension": 7,
-                                            "reason": "ok", "weighted_score": weighted_score})
+        t["topic_score_json"] = json.dumps({"significance": 7, "reason": "ok",
+                                            "weighted_score": weighted_score, "hn_boost": 0})
     return t
 
 
-def _good_scorer(novelty=8, specificity=7, tension=6):
+def _good_scorer(significance=8):
     def _fn(title, summary):
-        return {"novelty": novelty, "specificity": specificity, "tension": tension,
-                "reason": "solid story"}
+        return {"significance": significance, "reason": "solid story"}
     return _fn
 
 
@@ -83,13 +83,17 @@ def _insert_topics(repo, titles_categories):
 
 
 def test_score_topics_enriches_with_weighted_score():
-    topics = [{"id": 1, "title": "GPT-5 Released", "summary": None}]
-    scored = score_topics(topics, _good_scorer(novelty=8, specificity=7, tension=6))
+    topics = [{"id": 1, "title": "GPT-5 Released", "summary": None, "source_feed": "F"}]
+    cfg = SimpleNamespace(
+        scripter=SimpleNamespace(source_authority={"*": 1.0}),
+        topic_ingest=SimpleNamespace(hn=SimpleNamespace(corroboration_weight=2.0)),
+    )
+    scored = score_topics(topics, _good_scorer(significance=8), cfg, hn_items=[])
     assert len(scored) == 1
     t = scored[0]
     assert "topic_score_json" in t
     assert "weighted_score" in t
-    assert abs(t["weighted_score"] - (0.4*8 + 0.3*7 + 0.3*6)) < 0.001
+    assert abs(t["weighted_score"] - 8.0) < 0.001
 
 
 # ---------------------------------------------------------------------------
@@ -98,10 +102,14 @@ def test_score_topics_enriches_with_weighted_score():
 
 
 def test_score_topics_json_has_required_keys():
-    topics = [{"id": 1, "title": "Nvidia H200 Ships", "summary": None}]
-    scored = score_topics(topics, _good_scorer())
+    topics = [{"id": 1, "title": "Nvidia H200 Ships", "summary": None, "source_feed": "F"}]
+    cfg = SimpleNamespace(
+        scripter=SimpleNamespace(source_authority={"*": 1.0}),
+        topic_ingest=SimpleNamespace(hn=SimpleNamespace(corroboration_weight=2.0)),
+    )
+    scored = score_topics(topics, _good_scorer(), cfg, hn_items=[])
     data = json.loads(scored[0]["topic_score_json"])
-    for key in ("novelty", "specificity", "tension", "reason", "weighted_score"):
+    for key in ("significance", "reason", "weighted_score", "hn_boost"):
         assert key in data, f"missing key: {key}"
 
 
@@ -169,7 +177,7 @@ def test_run_stage_a_returns_empty_when_no_unscripted(tmp_path, repo):
 def test_run_stage_a_scores_all_unscripted_topics(tmp_path, repo):
     cfg = _make_cfg(tmp_path)
     _insert_topics(repo, [("GPT-5 Lands", "ai_models"), ("TSMC 2nm", "hardware")])
-    result = run_stage_a(cfg, repo, scorer_fn=_good_scorer(novelty=8, specificity=8, tension=8),
+    result = run_stage_a(cfg, repo, scorer_fn=_good_scorer(significance=8),
                          tagger_fn=lambda t, s: "ai_models")
     assert len(result) == 2
     for t in result:
@@ -179,12 +187,12 @@ def test_run_stage_a_scores_all_unscripted_topics(tmp_path, repo):
 def test_run_stage_a_persists_scores(tmp_path, repo):
     cfg = _make_cfg(tmp_path)
     ids = _insert_topics(repo, [("OpenAI o3 launch", "ai_models")])
-    run_stage_a(cfg, repo, scorer_fn=_good_scorer(novelty=8, specificity=7, tension=6),
+    run_stage_a(cfg, repo, scorer_fn=_good_scorer(significance=8),
                 tagger_fn=lambda t, s: "ai_models")
     rows = repo.unscripted_topics()
     scored = [r for r in rows if r["weighted_score"] is not None]
     assert len(scored) == 1
-    assert abs(scored[0]["weighted_score"] - (0.4*8 + 0.3*7 + 0.3*6)) < 0.001
+    assert abs(scored[0]["weighted_score"] - 8.0) < 0.001
 
 
 def test_run_stage_a_filters_below_quality_floor(tmp_path, repo):
@@ -195,7 +203,7 @@ def test_run_stage_a_filters_below_quality_floor(tmp_path, repo):
     def scorer(title, summary):
         score = 9 if "High" in title else 5
         calls.append(title)
-        return {"novelty": score, "specificity": score, "tension": score, "reason": "x"}
+        return {"significance": score, "reason": "x"}
 
     result = run_stage_a(cfg, repo, scorer_fn=scorer, tagger_fn=lambda t, s: "ai_models")
     titles = [t["title"] for t in result]
@@ -206,7 +214,7 @@ def test_run_stage_a_filters_below_quality_floor(tmp_path, repo):
 def test_run_stage_a_returns_at_most_candidate_pool_size(tmp_path, repo):
     cfg = _make_cfg(tmp_path, candidate_pool_size=2)
     _insert_topics(repo, [(f"Topic {i}", None) for i in range(6)])
-    result = run_stage_a(cfg, repo, scorer_fn=_good_scorer(novelty=8, specificity=8, tension=8),
+    result = run_stage_a(cfg, repo, scorer_fn=_good_scorer(significance=8),
                          tagger_fn=lambda t, s: _CATEGORIES[t.count(" ") % len(_CATEGORIES)])
     assert len(result) <= 2
 

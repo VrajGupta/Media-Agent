@@ -7,7 +7,7 @@ The shared glossary for the Media Agent pipeline (Pivot.6: AI-generated Tech/AI 
 ### Content units
 
 **Topic**:
-A tech/AI news item ingested from an RSS feed, awaiting scripting.
+An **on-niche** news item ingested from a feed, awaiting scripting. **On-niche** means the story's center of gravity is AI — a model or research release, or AI shipping inside a product (Apple Intelligence, Copilot) — **or** a major flagship hardware/OS launch (new iPhone, a major iOS version, a flagship GPU). Culture, entertainment, lawsuits and industry drama, and minor/incremental tech are **off-niche** and excluded even when they appear on a tech feed.
 _Avoid_: story, article, item.
 
 **Script**:
@@ -57,6 +57,16 @@ _Avoid_: transcode, conform, scaling.
 **Synthetic-person frame**:
 A **Shot** that depicts an AI-generated human. Constrained by the no-living-individuals rule: a **Shot** prompt must never name a real person (narration may, factual reporting is fine).
 _Avoid_: deepfake, fake person.
+
+### Topic selection
+
+**Significance**:
+The magnitude of a **Topic** — how major the launch or announcement is, and how major the player behind it. The primary axis for deciding which **Topics** become **Clips**, replacing the retired novelty/tension scoring that rewarded edgy or weird items. A new frontier model from a major lab scores high; an incremental or obscure item scores low.
+_Avoid_: novelty, importance, virality.
+
+**Trending corroboration**:
+Live external confirmation that a **Topic** is currently hot, read from the Hacker News front page. A **Topic** also trending on HN is boosted in selection. Distinct from **Significance**, which is an intrinsic editorial judgement — corroboration is measured, real-time popularity.
+_Avoid_: trending score, popularity, buzz.
 
 ### Ship lifecycle
 

@@ -37,19 +37,27 @@ def repo(tmp_path):
 
 
 def _make_cfg(tmp_path, *, feeds=None, recency_hours=48, jaccard_threshold=0.6,
-              seen_topics_window_days=30, stopwords=None):
+              seen_topics_window_days=30, stopwords=None, niche_gate_enabled=False,
+              low_yield_threshold=1, recency_hours_extended=96):
     if stopwords is None:
         stopwords = ["the", "a", "an", "is", "are", "of", "in", "to", "and",
                      "it", "just", "new", "says", "said", "openai", "ships"]
+    niche_gate = SimpleNamespace(
+        enabled=niche_gate_enabled,
+        low_yield_threshold=low_yield_threshold,
+        recency_hours_extended=recency_hours_extended,
+    )
     ti = SimpleNamespace(
         feeds=feeds if feeds is not None else [_FEED_URL],
         recency_hours=recency_hours,
         seen_topics_window_days=seen_topics_window_days,
         jaccard_threshold=jaccard_threshold,
         stopwords=stopwords,
+        niche_gate=niche_gate if niche_gate_enabled else None,
     )
     return SimpleNamespace(
         topic_ingest=ti,
+        ollama_model="qwen2.5:3b-instruct",
         paths=SimpleNamespace(logs_dir="logs"),
         abs_path=lambda rel: tmp_path / rel,
     )
@@ -320,3 +328,58 @@ def test_dry_run_returns_topics_without_db_writes(repo, tmp_path):
     assert result[0]["title"] == "GPT-5 Released"
     assert repo.conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0] == 0
     assert repo.conn.execute("SELECT COUNT(*) FROM seen_topics").fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue 31 — niche gate at ingest
+# ---------------------------------------------------------------------------
+
+
+def test_off_niche_topic_never_persisted(repo, tmp_path):
+    cfg = _make_cfg(tmp_path, niche_gate_enabled=True)
+
+    def _classify(title, summary, *, model):
+        from src.topic_ingest.niche_gate import NicheVerdict
+        if "OnlyFans" in title:
+            return NicheVerdict("off_niche", "culture entertainment", False)
+        return NicheVerdict("on_niche", "ai launch", False)
+
+    fake_parse = _make_parse({_FEED_URL: [
+        _entry(
+            "Apple TV OnlyFans shows",
+            "https://example.com/bad",
+            "culture story",
+        ),
+        _entry("GPT-5 Released", "https://example.com/good", "OpenAI ships GPT-5."),
+    ]})
+    result = fetch_unscripted_topics(
+        cfg, repo, _parse=fake_parse, _now=lambda: _NOW, _classify_niche=_classify
+    )
+    assert len(result) == 1
+    assert result[0]["title"] == "GPT-5 Released"
+    assert repo.conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0] == 1
+
+
+def test_low_yield_widens_recency_window(repo, tmp_path):
+    cfg = _make_cfg(
+        tmp_path,
+        niche_gate_enabled=True,
+        recency_hours=48,
+        recency_hours_extended=96,
+        low_yield_threshold=1,
+    )
+    inside_48h = _NOW - timedelta(hours=47)
+    inside_96h = _NOW - timedelta(hours=72)
+
+    def _classify(title, summary, *, model):
+        from src.topic_ingest.niche_gate import NicheVerdict
+        return NicheVerdict("on_niche", "ok", False)
+
+    fake_parse = _make_parse({_FEED_URL: [
+        _entry("Older AI launch", "https://example.com/old", pub_dt=inside_96h),
+    ]})
+    result = fetch_unscripted_topics(
+        cfg, repo, _parse=fake_parse, _now=lambda: _NOW, _classify_niche=_classify
+    )
+    assert len(result) == 1
+    assert result[0]["title"] == "Older AI launch"

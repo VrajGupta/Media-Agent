@@ -74,7 +74,7 @@ Each stage is independent and idempotent, communicating via the SQLite state sto
 - `config.yaml` — runtime config (committed). `.env` — secrets (`OPENROUTER_API_KEY` + YouTube OAuth env; gitignored). `data/client_secret.json` + `data/oauth_token.json` — YouTube OAuth (gitignored).
 
 ## Locked decisions (Pivot.6)
-- **Niche:** Tech/AI news (MKBHD-style topic angle, Zack D. Films delivery format). Topics sourced from live RSS feeds — no static `topic_pool`. **Not:** weird/unsettling facts, not phobias, not generic explainers.
+- **Niche:** AI-centric tech news — model/research releases, AI in products (Apple Intelligence, Copilot), and major flagship hardware/OS launches (new iPhone, major iOS, flagship GPU). Topics from curated RSS feeds + on-niche ingest gate (ADR-0004). **Not:** culture/entertainment, lawsuits/drama, minor/incremental tech, weird/unsettling facts, or generic explainers.
 - **Content kind:** `ai_generated`. No source-video ingestion. `clips.content_kind='ai_generated'` gates uploader templating.
 - **Vertical layout:** native 9:16. Kling std emits **720×1280 @ 24fps**; Ken Burns **Real-image shots** render at **1080×1920 @ 30fps**. The assembler applies **Shot normalization** (ADR-0002) to conform every **Shot** to `output_resolution` + `output_fps` before **Stitching** — no blurred-bg filtergraph needed.
 - **Subtitles:** centered line-at-a-time ASS burn. Position `\pos(540, 1500)`. Word timings from Whisper forced-align on TTS mp3. ≤28 chars/line, 100 ms fade-in.

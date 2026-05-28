@@ -132,17 +132,39 @@ image_fetch:
   web_fallback_enabled: false
 
 ken_burns_zoom_rate: 0.0015
+ken_burns_gradient_luma_max: 45
+ken_burns_gradient_saturation_max: 0.35
 
 # --- Topic ingest (RSS) ---
 topic_ingest:
   feeds:
-    - "https://feeds.arstechnica.com/arstechnica/technology-lab"
-    - "https://techcrunch.com/feed/"
-    - "https://www.theverge.com/rss/index.xml"
+    - "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml"
+    - "https://blog.google/technology/ai/rss/"
     - "https://openai.com/blog/rss.xml"
     - "https://deepmind.google/blog/rss.xml"
     - "https://huggingface.co/blog/feed.xml"
-    - "https://venturebeat.com/feed/"
+    - "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"
+    - "https://arstechnica.com/ai/feed/"
+  niche_gate:
+    enabled: true
+    low_yield_threshold: 1
+    recency_hours_extended: 96
+  hn:
+    enabled: true
+    top_stories_url: "https://hacker-news.firebaseio.com/v0/topstories.json"
+    item_url_template: "https://hacker-news.firebaseio.com/v0/item/{id}.json"
+    max_stories: 30
+    corroboration_weight: 2.0
+
+scripter:
+  source_authority:
+    "https://openai.com/blog/rss.xml": 1.3
+    "https://deepmind.google/blog/rss.xml": 1.3
+    "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml": 1.3
+    "https://blog.google/technology/ai/rss/": 1.2
+    "https://huggingface.co/blog/feed.xml": 1.1
+    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml": 0.9
+    "https://arstechnica.com/ai/feed/": 0.9
 
 # --- Retention (days) ---
 retention:

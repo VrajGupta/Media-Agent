@@ -8,16 +8,34 @@ from typing import Callable
 from src.scripter.shots import normalize_shots
 
 
-def score_topics(topics: list[dict], scorer_fn: Callable) -> list[dict]:
+def _source_authority(cfg, source_feed: str | None) -> float:
+    mapping = getattr(cfg.scripter, "source_authority", None) or {}
+    if source_feed and source_feed in mapping:
+        return float(mapping[source_feed])
+    return float(mapping.get("*", 1.0))
+
+
+def score_topics(
+    topics: list[dict],
+    scorer_fn: Callable,
+    cfg,
+    *,
+    hn_items=None,
+) -> list[dict]:
+    hn_weight = float(getattr(getattr(cfg.topic_ingest, "hn", None), "corroboration_weight", 2.0))
     result = []
     for t in topics:
         raw = scorer_fn(t["title"], t.get("summary"))
-        novelty = raw["novelty"]
-        specificity = raw["specificity"]
-        tension = raw["tension"]
-        weighted = 0.4 * novelty + 0.3 * specificity + 0.3 * tension
+        significance = float(raw["significance"])
+        authority = _source_authority(cfg, t.get("source_feed"))
+        hn_boost = 0.0
+        if hn_items is not None:
+            from src.topic_ingest.hn import hn_corroboration
+
+            hn_boost = hn_corroboration(t, hn_items, weight=hn_weight)
+        weighted = significance * authority + hn_boost
         t = dict(t)
-        t["topic_score_json"] = json.dumps({**raw, "weighted_score": weighted})
+        t["topic_score_json"] = json.dumps({**raw, "weighted_score": weighted, "hn_boost": hn_boost})
         t["weighted_score"] = weighted
         result.append(t)
     return result
@@ -191,7 +209,13 @@ def run_stage_a(cfg, repo, *, scorer_fn: Callable | None = None, tagger_fn: Call
         return []
 
     if scorer_fn is not None:
-        topics = score_topics(topics, scorer_fn)
+        hn_items = None
+        hn_cfg = getattr(cfg.topic_ingest, "hn", None)
+        if hn_cfg is not None and getattr(hn_cfg, "enabled", False):
+            from src.topic_ingest.hn import fetch_hn_front_page
+
+            hn_items = fetch_hn_front_page(cfg)
+        topics = score_topics(topics, scorer_fn, cfg, hn_items=hn_items)
         for t in topics:
             repo.update_topic_score(t["id"], t["topic_score_json"], t["weighted_score"])
         quality_floor = sc.quality_floor

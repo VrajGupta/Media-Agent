@@ -17,10 +17,10 @@ Tech/AI news YouTube Shorts pipeline. Slices 1–9 complete. **Slice 10 uploaded
 
 | Phase | File | Status | Last Updated | Summary |
 |---|---|---|---|---|
-| planning | [phase-planning.md](phase-planning.md) | in-progress | 2026-05-26 | Niche locked (Tech/AI), 10-slice plan, two-gate sign-off; Slice 10/11 refined; **finish-line roadmap** ("done" def + Issues 26–29, ADR-0003 licensed-only sourcing) |
-| architecture | [phase-architecture.md](phase-architecture.md) | in-progress | 2026-05-26 | SQLite schema (4 Pivot.6 tables), Pydantic Config, 50+ DAL helpers, Provider ABC; **ADR-0002** assembler shot normalization; **ADR-0003** licensed-only image sourcing |
-| development | [phase-development.md](phase-development.md) | in-progress | 2026-05-26 | Issues 22+26 shipped; Issue 27 docs done; live spike + Issues 28–29 HITL pending |
-| testing | [phase-testing.md](phase-testing.md) | in-progress | 2026-05-26 | Issue 22 lavfi integration tests + `_generate_clip` hybrid path; 41 assembler/hybrid green |
+| planning | [phase-planning.md](phase-planning.md) | in-progress | 2026-05-27 | Niche locked (Tech/AI), 10-slice plan, two-gate sign-off; finish-line roadmap (Issues 26–29); **AI-niche refit** (ADR-0004 AI-centric niche + ingest gate + significance/HN, Issues 30–34) |
+| architecture | [phase-architecture.md](phase-architecture.md) | in-progress | 2026-05-27 | SQLite schema (4 Pivot.6 tables), Pydantic Config, 50+ DAL helpers, Provider ABC; **ADR-0002** assembler shot normalization; **ADR-0003** licensed-only image sourcing; **ADR-0004** AI-centric niche + ingest relevance gate |
+| development | [phase-development.md](phase-development.md) | in-progress | 2026-05-28 | ADR-0004 Issues 30–34 shipped; dry-run OK; live clip review pending |
+| testing | [phase-testing.md](phase-testing.md) | in-progress | 2026-05-27 | Issue 22 lavfi tests + **Issue 31/33 niche/Ken Burns tests**; 36 assembler green |
 | deployment | [phase-deployment.md](phase-deployment.md) | in-progress | 2026-05-24 | Slice 10 live upload succeeded; OAuth re-authed 2026-05-24 |
 | review | [phase-review.md](phase-review.md) | complete | 2026-05-24 | 4-check policy gate, 6-gate quality screen, AI disclosure compliance (Slice 9), pre-flight checklist |
 

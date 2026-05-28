@@ -14,6 +14,20 @@ from src.config_loader.weekdays import parse_upload_weekdays
 # ---------------------------------------------------------------------------
 
 
+class NicheGateConfig(BaseModel):
+    enabled: bool = True
+    low_yield_threshold: int = 1
+    recency_hours_extended: int = 96
+
+
+class HnConfig(BaseModel):
+    enabled: bool = True
+    top_stories_url: str = "https://hacker-news.firebaseio.com/v0/topstories.json"
+    item_url_template: str = "https://hacker-news.firebaseio.com/v0/item/{id}.json"
+    max_stories: int = 30
+    corroboration_weight: float = 2.0
+
+
 class TopicIngestConfig(BaseModel):
     feeds: list[str] = Field(default_factory=list)
     recency_hours: int = 48
@@ -27,6 +41,8 @@ class TopicIngestConfig(BaseModel):
         "if", "into", "or", "so", "than", "that", "this", "too", "when",
         "where", "while", "just", "it", "its", "says", "said", "new", "over",
     ])
+    niche_gate: NicheGateConfig = Field(default_factory=NicheGateConfig)
+    hn: HnConfig = Field(default_factory=HnConfig)
 
 
 class AiGenConfig(BaseModel):
@@ -77,6 +93,7 @@ class ScripterConfig(BaseModel):
         "<<placeholder>>", "I think", "as an AI",
     ])
     retry_on_failure: int = 3
+    source_authority: dict[str, float] = Field(default_factory=dict)
 
 
 class NarrationConfig(BaseModel):
@@ -214,6 +231,8 @@ class Config(BaseModel):
     music_volume_db: float = -15.0
     blurred_bg_sigma: int = 20
     ken_burns_zoom_rate: float = 0.0015
+    ken_burns_gradient_luma_max: int = 45
+    ken_burns_gradient_saturation_max: float = 0.35
     copyright_acknowledgement: str | None = None
 
     # Pivot.7 sub-models

@@ -998,3 +998,11 @@ Whisper alignment falls back to CPU because `cublas64_12.dll` is not on PATH. Wo
 Fix steps: (1) confirm CUDA 12.x toolkit installed; (2) add `CUDA\v12.x\bin` to user PATH; (3) verify `where cublas64_12.dll`; (4) re-run one clip and confirm no CPU fallback in logs.
 
 **Acceptance (Pivot.7):** one hybrid Short — real entity images + AI transitions (no synthetic person), natural Kokoro voice, per-clip Kling cost ≈ half the 4-shot baseline, AI disclosure intact, docs updated.
+
+### AI-niche refit (ADR-0004, Issues 30–34) · complete (2026-05-27)
+- [x] **Issue 30** — Curated AI-focused `topic_ingest.feeds`; `docs/rss_feeds.md` updated; VentureBeat/main Verge/Ars/TechCrunch dropped.
+- [x] **Issue 31** — On-niche ingest gate (`classify_niche`, reject-before-persist, 48h→96h low-yield widen).
+- [x] **Issue 32** — Significance scoring + HN corroboration (`fetch_hn_front_page`, `hn_corroboration`); novelty/tension formula removed.
+- [x] **Issue 33** — Ken Burns stretch fix + dominant-color gradient background.
+- [x] **Issue 34** — `spike-82` rejected (`rejected_policy`, file out of `pending/`); `CLAUDE.md` + `plan.md` niche reconciled to ADR-0004.
+- [2026-05-28] Dry-run verify: `gen_run --dry-run --clips 1` exit 0; live MP4 review pending operator.

@@ -7,7 +7,9 @@
 
 ## Direction summary
 
-**Niche:** Tech/AI news Shorts. MKBHD-style topic angle, Zack D. Films delivery format. ~16 s clip, ~40-word narration, 4 stitched shots, hook in first 5 words, ends on a teaser.
+**Niche:** AI-centric tech news Shorts (ADR-0004). On-niche = model/research releases, AI shipping in products, or major flagship hardware/OS launches. Culture, drama, and minor/incremental tech are excluded at ingest. MKBHD-style topic angle, Zack D. Films delivery format. ~16 s clip, ~40-word narration, 4 stitched shots, hook in first 5 words, ends on a teaser.
+
+**PRD / ADR:** `docs/prds/ai-niche-trending-selection-and-photo-framing.md` · `docs/adr/0004-ai-centric-niche-and-ingest-relevance-gate.md`
 
 **Generator:** OpenRouter Kling 3.0 std (`kwaivgi/kling-v3.0-std`) via existing `src/ai_gen/openrouter_kling.py`. Bearer auth via `OPENROUTER_API_KEY`. Provider-abstracted behind `ai_gen.base.Provider` ABC.
 
@@ -16,7 +18,7 @@
 **Visual style suffix (locked):**
 `"clean editorial product photography, soft studio lighting, neutral backgrounds, minimalist composition, sharp focus, vertical 9:16, premium tech magazine look"`
 
-**Topic source:** Live RSS pull from mixed consumer + research tech/AI feeds (48 h window). Dedup by URL + title-similarity. User-curated feed URL list, configured at Slice 7.
+**Topic source:** Curated AI-focused RSS feeds (`docs/rss_feeds.md`) with 48 h recency (96 h on low yield). On-niche LLM gate at ingest + Significance/HN ranking at scripter Stage A. Dedup by URL + title-similarity.
 
 **Budget:** $5/week → 2–3 clips/week (scale up when growth validates the format).
 

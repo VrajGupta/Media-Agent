@@ -1,7 +1,7 @@
 # Phase: development
 **Project:** Media-Agent (Pivot.6)
 **Status:** in-progress
-**Last updated:** 2026-05-26
+**Last updated:** 2026-05-28
 
 ## Objective
 
@@ -37,7 +37,9 @@ Implement all 10 slices of the Pivot.6 AI-generated pipeline: RSS ingest → top
 - [2026-05-22] **Slice 9 (AI disclosure compliance):** `src/uploader/templater.py` + `src/uploader/insert_body.py` AI-gen branch. `status.containsSyntheticMedia=true` on all `ai_generated` uploads. Commit `f871df8`. Tests green.
 - [2026-05-23] **Slice 10 (First live upload):** Operational plan locked. BLOCKED — two manual unblock steps required before execution.
 
-- [2026-05-26] **Issue 26 (Licensed-only sourcing, ADR-0003):** `shot_plan.resolve_shot_plan` + `probe_licensed_image`; degrade-on-miss before Kling; production config locked.
+- [2026-05-28] Dry-run verify: `gen_run --dry-run --clips 1` exit 0; live MP4 review pending operator.
+- [2026-05-27] **Issues 30–34 (ADR-0004):** curated feeds, niche gate, significance+HN, Ken Burns fix, doc reconciliation. 55 tests green.
+- [2026-05-27] **Issue 31 (Niche gate at ingest):** `classify_niche` reject-before-persist; 48h→96h low-yield widen.
 
 ## Artifacts
 
