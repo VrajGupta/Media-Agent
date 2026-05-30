@@ -6,7 +6,8 @@ where the work is at a glance.
 
 | Date | Session folder | Summary | Next action |
 |---|---|---|---|
-| 2026-05-28 | [adr-0004-live-clip-review](2026-05-28__adr-0004-live-clip-review/handoff.md) | Live gen_run blocked on cost cap; sample MP4 rendered for HITL | Review pending MP4; fix hybrid path (`openai_logo`) then `gen_run --clips 1` |
+| 2026-05-28 | [sample-clip-upload](2026-05-28__sample-clip-upload/handoff.md) | Sample clip approved + uploaded `qRdVYO1Tmfw` (publish 2026-06-02 09:00 SGT) | Studio spot-check on publish day; then hybrid `gen_run --clips 1` |
+| 2026-05-28 | [adr-0004-live-clip-review](2026-05-28__adr-0004-live-clip-review/handoff.md) | Live gen_run blocked on cost cap; sample MP4 rendered for HITL | *(superseded by sample-clip-upload)* |
 | 2026-05-28 | [adr-0004-dry-run-handoff](2026-05-28__adr-0004-dry-run-handoff/handoff.md) | ADR-0004 shipped + `gen_run --dry-run --clips 1` OK; no upload | *(superseded by live-clip-review above)* |
 | 2026-05-27 | [issue-33-ken-burns-tdd](2026-05-27__issue-33-ken-burns-tdd/handoff.md) | TDD Issues 30–34 complete (ADR-0004 refit) | *(superseded by dry-run handoff above)* |
 | 2026-05-27 | [ai-niche-and-photo-framing](2026-05-27__ai-niche-and-photo-framing/handoff.md) | Diagnosed OnlyFans clip + stretched photo; grill → ADR-0004, PRD, Issues 30–34 | *(superseded by TDD session above for 31+33)* |

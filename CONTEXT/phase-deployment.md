@@ -1,7 +1,7 @@
 # Phase: deployment
 **Project:** Media-Agent (Pivot.6)
 **Status:** in-progress
-**Last updated:** 2026-05-24
+**Last updated:** 2026-05-28
 
 ## Objective
 
@@ -45,7 +45,8 @@ Before any real (non-`--dry-run`) invocation:
 - [2026-05-09] **Phase 4.5 live-verified:** policy_gate + quality_screen gates exercised on real rendered clip.
 - [2026-05-21] **Slice 2 spike deployed:** 8 Kling shots generated via `scripts/generate_clip.py`. Auth fix pushed (`fcf2385`).
 - [2026-05-22] **Slice 8 committed:** `src/gen_run.py` commit `82ce0d1`. Task Scheduler XML points to this.
-- [2026-05-22] **Slice 9 committed:** `src/uploader/templater.py` AI-gen branch commit `f871df8`.
+- [2026-05-24] **Slice 10 live upload:** `9lpL8kuLX08` (Corti candidate).
+- [2026-05-28] **Post-ADR-0004 sample upload:** clip `092b3504` → YouTube `qRdVYO1Tmfw` via `src.uploader --clip-id`; scheduled `publishAt=2026-06-02T01:00:00Z` (09:00 SGT). Operator HITL approve path exercised.
 
 ## Artifacts
 
@@ -68,6 +69,7 @@ Before any real (non-`--dry-run`) invocation:
 - Phase 7 hardening live run (2026-05-09)
 - Slice 2 spike deploy (2026-05-21)
 - Slice 8/9 commit + push (2026-05-22)
+- [sample-clip-upload](.sessions/2026-05-28__sample-clip-upload/handoff.md) — 2026-05-28
 
 ## Open Items
 
