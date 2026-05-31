@@ -91,39 +91,26 @@ def _download_candidate(
     return data, width, height
 
 
-def probe_licensed_image(
+def resolve_licensed_image(
     entity: str,
     query: str | None,
     cfg,
     *,
     cache_dir: Path | None = None,
     session: requests.Session | None = None,
-) -> bool:
-    """Return True if licensed sources can satisfy entity (never consults web)."""
-    if_cfg = cfg.image_fetch
-    _reject_living_person(entity, if_cfg.living_person_patterns)
-
-    cache_root = cache_dir or cfg.abs_path(cfg.paths.images_dir)
-    key = _cache_key(entity, query)
-    if _load_cached(cache_root, key) is not None:
-        return True
-
-    http = session or requests.Session()
-    source_names = [n for n in if_cfg.sources if n != "web"]
-    sources = build_sources(
-        source_names,
-        http,
-        serpapi_key=os.environ.get("SERPAPI_KEY"),
-    )
-
-    for source in sources:
-        try:
-            candidates = source.search(entity, query)[: if_cfg.max_candidates_per_source]
-        except Exception:
-            continue
-        if candidates:
-            return True
-    return False
+) -> ImageAsset | None:
+    """Fetch+validate+cache over licensed sources only; None on miss (never web)."""
+    try:
+        return fetch_image(
+            entity,
+            query,
+            cfg,
+            cache_dir=cache_dir,
+            session=session,
+            licensed_only=True,
+        )
+    except NoImageFoundError:
+        return None
 
 
 def provenance_for_entity(
@@ -145,6 +132,7 @@ def fetch_image(
     *,
     cache_dir: Path | None = None,
     session: requests.Session | None = None,
+    licensed_only: bool = False,
 ) -> ImageAsset:
     """Fetch a validated real image for entity; cache + provenance sidecar."""
     if_cfg = cfg.image_fetch
@@ -160,7 +148,7 @@ def fetch_image(
 
     http = session or requests.Session()
     source_names = list(if_cfg.sources)
-    if not if_cfg.web_fallback_enabled:
+    if licensed_only or not if_cfg.web_fallback_enabled:
         source_names = [n for n in source_names if n != "web"]
     sources = build_sources(
         source_names,

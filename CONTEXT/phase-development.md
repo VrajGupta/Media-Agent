@@ -1,7 +1,7 @@
 # Phase: development
 **Project:** Media-Agent (Pivot.6)
 **Status:** in-progress
-**Last updated:** 2026-05-28 (live-clip-review)
+**Last updated:** 2026-05-31 (issues-35-37-tdd)
 
 ## Objective
 
@@ -39,7 +39,7 @@ Implement all 10 slices of the Pivot.6 AI-generated pipeline: RSS ingest → top
 
 - [2026-05-28] Dry-run verify: `gen_run --dry-run --clips 1` exit 0; live MP4 review pending operator.
 - [2026-05-28] Live `gen_run --clips 1` exit 0 but no MP4 (cost guard 201¢ > 100¢ cap). Sample clip via `render_from_script.py` in `output/pending/` for HITL. Hybrid path blocked on `openai_logo` licensed fetch; `per_clip_cost_cents_max` bumped to 270.
-- [2026-05-28] Sample clip `092b3504` operator-approved and uploaded to YouTube `qRdVYO1Tmfw` (scheduled publish 2026-06-02 09:00 SGT).
+- [2026-05-31] **Issues 35–37 (first live hybrid gen_run fixes):** `resolve_licensed_image` + shot-plan asset threading; niche infra fail-open; pre-billing `evaluate_clip_policy`; cap 250¢. Dry-run OK; live HITL pending (Issue 38).
 - [2026-05-27] **Issues 30–34 (ADR-0004):** curated feeds, niche gate, significance+HN, Ken Burns fix, doc reconciliation. 55 tests green.
 - [2026-05-27] **Issue 31 (Niche gate at ingest):** `classify_niche` reject-before-persist; 48h→96h low-yield widen.
 
@@ -79,5 +79,6 @@ Implement all 10 slices of the Pivot.6 AI-generated pipeline: RSS ingest → top
 - [2026-05-24] Slice 10 uploaded (`9lpL8kuLX08`); T+1h Studio gate + T+48h stability (Issue 13) remain.
 - [2026-05-24] Issue 11 + Issue 14 code shipped; `gen_run.py` unattended weekly run not live-verified.
 - [2026-05-26] **Pivot.7 hybrid spike:** assembly fix shipped; live `scripts/spike_hybrid.py` run + HITL sign-off (Issue 20) pending.
-- [2026-05-28] **ADR-0004 hybrid live verify:** cost cap raised to 270¢; `openai_logo` licensed fetch fails; sample clip uploaded (`qRdVYO1Tmfw`) but was ai_video-only, not hybrid.
+- [2026-05-28] **ADR-0004 hybrid live verify:** cost cap 250¢ (was 270); licensed fetch-and-cache resolver; sample clip uploaded (`qRdVYO1Tmfw`) but was ai_video-only, not hybrid.
+- Next: operator live `gen_run --clips 1` (Issue 38 HITL).
 - Next grill after Slice 10 `[x]`: scripter quality (deferred from 2026-05-23 handoff).

@@ -1006,3 +1006,28 @@ Fix steps: (1) confirm CUDA 12.x toolkit installed; (2) add `CUDA\v12.x\bin` to 
 - [x] **Issue 33** — Ken Burns stretch fix + dominant-color gradient background.
 - [x] **Issue 34** — `spike-82` rejected (`rejected_policy`, file out of `pending/`); `CLAUDE.md` + `plan.md` niche reconciled to ADR-0004.
 - [2026-05-28] Dry-run verify: `gen_run --dry-run --clips 1` exit 0; live MP4 review pending operator.
+
+### First live hybrid gen_run (Issues 35–38) · 2026-05-31
+
+#### Issue 35 — Resolve fetches-and-caches + cost cap 250¢ · complete
+- [x] `resolve_licensed_image()` replaces search-only `probe_licensed_image`; fetch+validate+cache over licensed sources only.
+- [x] `resolve_shot_plan` seam: `licensed_resolver → ImageAsset | None`; real-image shots carry `image_asset`; render reuses cache (no second fetch).
+- [x] `gen_run` resolves shot plan once per script; pre-billing cost projection from single resolve.
+- [x] `ai_gen.per_clip_cost_cents_max: 270 → 250` ($2.50/video; ≥1 licensed image required).
+- [x] Tests: `tests/test_shot_plan.py`, `tests/test_hybrid_gen_run_policy.py`, `tests/image_fetch/test_fetcher.py`.
+
+#### Issue 36 — Niche gate infra-failure split · complete
+- [x] `_apply_niche_gate`: `infrastructure_failed=True` → keep topic (fail-open) + `niche_gate_unavailable` alert.
+- [x] Real `off_niche` still dropped; `on_niche` still kept; classifier prompt unchanged.
+- [x] Tests: `tests/test_topic_ingest_niche_gate.py`.
+
+#### Issue 37 — Pre-billing narration policy check · complete
+- [x] Removed misfit `policy_gate.run_all` from `gen_run`.
+- [x] Per-script `evaluate_clip_policy(narration, title)` before ai_gen billing; infra fail-soft skip; uploader re-check unchanged.
+- [x] Tests: `tests/test_hybrid_gen_run_policy.py`, updated `tests/test_gen_run.py`.
+
+#### Issue 38 — Live hybrid gen_run verification · HITL pending
+- [x] Dry-run rehearsal: `gen_run --dry-run --clips 1` exit 0 (2026-05-31; zero DB writes, zero OpenRouter spend).
+- [x] `scripts/spike_hybrid.py` marked superseded (use `python -m src.gen_run --clips 1`).
+- [ ] **Operator:** live `gen_run --clips 1` → Hybrid MP4 in `output/pending/` at 1080×1920; ffprobe + cost + provenance + Tue/Thu slot; HITL eyeball sign-off.
+- [ ] Evidence row in this section after live run (ffprobe dims, `quota_usage`, `runs.md`, provenance).

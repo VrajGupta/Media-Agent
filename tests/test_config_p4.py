@@ -264,4 +264,6 @@ def test_config_yaml_loads_cleanly():
     assert cfg.upload_weekdays == frozenset({1, 3})
     assert cfg.image_fetch.web_fallback_enabled is False
     assert cfg.image_fetch.sources == ["logo", "wikimedia", "openverse"]
+    assert cfg.ai_gen.per_clip_cost_cents_max == 250
+    assert cfg.ai_gen.daily_spend_cents_ceiling == 500
     assert cfg.copyright_acknowledgement == "hybrid_real_image_v1"

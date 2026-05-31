@@ -123,8 +123,19 @@ def test_generate_clip_hybrid_path_stitches_mixed_resolution(tmp_path):
     import shutil
     from unittest.mock import MagicMock, patch
 
+    from src.image_fetch.base import ImageAsset
     from src.gen_run import _generate_clip
     from tests.test_gen_run import _GenStubConfig, _hybrid_script
+
+    asset = ImageAsset(
+        path=str(tmp_path / "still.jpg"),
+        source="logo",
+        license="CC0",
+        source_url="https://example.com",
+        width=1080,
+        height=1920,
+    )
+    (tmp_path / "still.jpg").write_bytes(b"x")
 
     cfg = _GenStubConfig(tmp_path)
     cfg.assembler.crossfade_enabled = True
@@ -139,7 +150,8 @@ def test_generate_clip_hybrid_path_stitches_mixed_resolution(tmp_path):
         src = _lavfi_audio(path.parent, 7.5)
         shutil.copy2(src, path)
 
-    with patch("src.gen_run.generate_shots", return_value=[kling, kling]), \
+    with patch("src.gen_run.resolve_licensed_image", return_value=asset), \
+         patch("src.gen_run.generate_shots", return_value=[kling, kling]), \
          patch("src.gen_run._render_real_image_shot", return_value=ken_burns), \
          patch("src.gen_run.synthesize", side_effect=_fake_synthesize), \
          patch("src.gen_run.align", return_value=[{"word": "Hi", "start": 0.0, "end": 0.5}]), \

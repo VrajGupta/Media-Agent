@@ -12,12 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.policy_gate.evaluator import PolicyVerdict
 from src.state import Repository, connect, initialize_schema
-
-
-# ---------------------------------------------------------------------------
-# Stub config — minimal duck-type for Pivot.6 gen_run fields
-# ---------------------------------------------------------------------------
 
 
 class _AiGenStub:
@@ -134,7 +130,6 @@ def _all_stages_patched():
         patch("src.gen_run.run_stage_a", return_value=[]),
         patch("src.gen_run.run_stage_b", return_value=[]),
         patch("src.gen_run.run_stage_c", return_value=[]),
-        patch("src.policy_gate.run_all", return_value=[]),
         patch("src.quality_screen.run_all", return_value=[]),
         patch("src.slot_planner.run_all", return_value=[]),
         patch("src.retention.run_all", return_value=MagicMock()),
@@ -180,7 +175,6 @@ def test_calls_fetch_unscripted_topics(tmp_path):
          patch("src.gen_run.run_stage_a", return_value=[]), \
          patch("src.gen_run.run_stage_b", return_value=[]), \
          patch("src.gen_run.run_stage_c", return_value=[]), \
-         patch("src.policy_gate.run_all", return_value=[]), \
          patch("src.quality_screen.run_all", return_value=[]), \
          patch("src.slot_planner.run_all", return_value=[]), \
          patch("src.retention.run_all", return_value=MagicMock()):
@@ -199,13 +193,11 @@ def test_calls_batch_stages(tmp_path):
          patch("src.gen_run.run_stage_a", return_value=[]), \
          patch("src.gen_run.run_stage_b", return_value=[]), \
          patch("src.gen_run.run_stage_c", return_value=[]), \
-         patch("src.policy_gate.run_all", return_value=[]) as p_gate, \
          patch("src.quality_screen.run_all", return_value=[]) as p_qs, \
          patch("src.slot_planner.run_all", return_value=[]) as p_sp, \
          patch("src.retention.run_all", return_value=MagicMock()) as p_ret:
         run_generation(repo=repo, cfg=cfg, dry_run=True)
 
-    p_gate.assert_called_once()
     p_qs.assert_called_once()
     p_sp.assert_called_once()
     p_ret.assert_called_once()
@@ -230,7 +222,8 @@ def test_generate_shots_called_once_per_script(tmp_path):
          patch("src.gen_run.run_stage_a", return_value=[]), \
          patch("src.gen_run.run_stage_b", return_value=[]), \
          patch("src.gen_run.run_stage_c", return_value=fake_scripts), \
-         patch("src.policy_gate.run_all", return_value=[]), \
+         patch("src.gen_run.evaluate_clip_policy", return_value=PolicyVerdict(passed=True)), \
+         patch("src.gen_run.resolve_licensed_image", return_value=MagicMock(path=str(tmp_path / "img.jpg"), source="logo", license="CC0", source_url="https://x", width=1080, height=1920)), \
          patch("src.quality_screen.run_all", return_value=[]), \
          patch("src.slot_planner.run_all", return_value=[]), \
          patch("src.retention.run_all", return_value=MagicMock()), \
@@ -264,7 +257,8 @@ def test_dry_run_skips_generate_shots_and_synthesize(tmp_path):
          patch("src.gen_run.run_stage_a", return_value=[]), \
          patch("src.gen_run.run_stage_b", return_value=[]), \
          patch("src.gen_run.run_stage_c", return_value=fake_scripts), \
-         patch("src.policy_gate.run_all", return_value=[]), \
+         patch("src.gen_run.evaluate_clip_policy", return_value=PolicyVerdict(passed=True)), \
+         patch("src.gen_run.resolve_licensed_image", return_value=MagicMock(path=str(tmp_path / "img.jpg"), source="logo", license="CC0", source_url="https://x", width=1080, height=1920)), \
          patch("src.quality_screen.run_all", return_value=[]), \
          patch("src.slot_planner.run_all", return_value=[]), \
          patch("src.retention.run_all", return_value=MagicMock()), \
@@ -283,7 +277,7 @@ def test_dry_run_skips_generate_shots_and_synthesize(tmp_path):
 
 
 def test_stage_failure_halts_and_records_error(tmp_path):
-    """If policy_gate raises, generate_shots is not called and DB records success=0."""
+    """If quality_screen raises, generate_shots is not called and DB records success=0."""
     from src.gen_run import run_generation
 
     repo = _new_repo(tmp_path)
@@ -297,28 +291,26 @@ def test_stage_failure_halts_and_records_error(tmp_path):
          patch("src.gen_run.run_stage_a", return_value=[]), \
          patch("src.gen_run.run_stage_b", return_value=[]), \
          patch("src.gen_run.run_stage_c", return_value=fake_scripts), \
-         patch("src.policy_gate.run_all", side_effect=RuntimeError("gate boom")), \
-         patch("src.quality_screen.run_all") as p_qs, \
+         patch("src.gen_run.evaluate_clip_policy", return_value=PolicyVerdict(passed=True)), \
+         patch("src.gen_run.resolve_licensed_image", return_value=None), \
+         patch("src.quality_screen.run_all", side_effect=RuntimeError("screen boom")), \
          patch("src.slot_planner.run_all") as p_sp, \
          patch("src.retention.run_all") as p_ret, \
          patch("src.gen_run.generate_shots") as p_gen:
-        with pytest.raises(RuntimeError, match="gate boom"):
+        with pytest.raises(RuntimeError, match="screen boom"):
             run_generation(repo=repo, cfg=cfg, dry_run=True)
 
-    # Later stages not reached
     p_gen.assert_not_called()
-    p_qs.assert_not_called()
+    p_sp.assert_not_called()
 
-    # DB row records failure
     row = repo.conn.execute(
         "SELECT success, summary_json FROM runs ORDER BY run_id DESC LIMIT 1"
     ).fetchone()
     assert row["success"] == 0
     parsed = json.loads(row["summary_json"])
     assert "RuntimeError" in parsed["error"]
-    assert "gate boom" in parsed["error"]
+    assert "screen boom" in parsed["error"]
 
-    # Failure alert written
     alerts = (Path(cfg.paths.logs_dir) / "alerts.md").read_text()
     assert "gen_run_failed" in alerts
 
@@ -403,7 +395,6 @@ def test_runs_md_appended_on_failure(tmp_path):
          patch("src.gen_run.run_stage_a", return_value=[]), \
          patch("src.gen_run.run_stage_b", return_value=[]), \
          patch("src.gen_run.run_stage_c", return_value=[]), \
-         patch("src.policy_gate.run_all", return_value=[]), \
          patch("src.quality_screen.run_all", return_value=[]), \
          patch("src.slot_planner.run_all", return_value=[]), \
          patch("src.retention.run_all", return_value=MagicMock()):

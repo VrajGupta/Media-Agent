@@ -1,7 +1,7 @@
 # Phase: planning
 **Project:** Media-Agent (Pivot.6 → Pivot.7)
 **Status:** in-progress
-**Last updated:** 2026-05-26
+**Last updated:** 2026-05-30
 
 ## Objective
 
@@ -40,6 +40,9 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 - **[2026-05-27, ADR-0004] Topic selection = Significance × source-authority + Hacker News trending corroboration**, replacing the `novelty/specificity/tension` scorer (which rewarded "weird"; scored the OnlyFans story 6.9). HN is keyless/free; degrades gracefully.
 - **[2026-05-27, ADR-0004] Feeds curated to AI-focused** — add Anthropic + Google AI; swap Verge/Ars main → AI subfeeds; keep OpenAI/DeepMind/HF; drop VentureBeat. Supersedes the 7-feed list above.
 - **[2026-05-27] Real-image framing = true-aspect photo + slow zoom over a per-photo dominant-color gradient** (dark-clamped for white-subtitle contrast). Replaces blurred-bg fill and fixes the `zoompan s=WxH` stretch bug. (PRD, not ADR — bug fix + aesthetic.)
+- **[2026-05-30] First live hybrid `gen_run` task scoped** — fix three spend/observability defects so a real `gen_run --clips 1` yields one Hybrid clip in `output/pending/`, stop at HITL review (Issue 29 ship stays separate). Defect fixes locked: (1) resolve **fetches-and-caches** (retire the search-only probe; degrade decision on a validated asset) → **ADR-0003 Refinement**; (2) niche gate **splits `infrastructure_failed` from `off_niche`** (fail-open + alert; prompt unchanged, retune deferred to live evidence); (3) **narration policy check before ai_gen billing**, removing the misfit legacy `policy_gate.run_all`.
+- **[2026-05-30] Per-clip cost cap `270 → 250¢`** — budget basis $20/mo ÷ 8 videos = $2.50/video; at ~67¢/shot this rejects a 4-shot fully-degraded clip, so every clip must resolve ≥1 licensed image (an "at least minimally hybrid" floor). `daily_spend_cents_ceiling: 500` unchanged.
+- **[2026-05-30] Prove via `gen_run` directly, not the throwaway spike** — Issue 20 (`spike_hybrid.py`) superseded; the fixes live in the gen_run path so gen_run is the stronger proof.
 
 ## Accomplishments
 
@@ -56,6 +59,7 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 - [2026-05-24] /to-issues published Issue 14 (weekday cadence allowlist, AFK, no blockers).
 - [2026-05-26] /grill-with-docs → /to-prd → /to-issues: locked the finish-line roadmap ("done" def + 7 milestones), ADR-0003 (licensed-only sourcing), glossary (Hybrid clip / Licensed source); published PRD `finish-line-autonomous-hybrid` + Issues 26–29.
 - [2026-05-27] /grill-with-docs → /to-prd → /to-issues: root-caused the OnlyFans clip (Topic #82) + stretched photo (zoompan bug); locked ADR-0004 (AI-centric niche, ingest gate, significance+HN selection); sharpened glossary (Topic / Significance / Trending corroboration); published PRD `ai-niche-trending-selection-and-photo-framing` + Issues 30–34. No code written.
+- [2026-05-30] /grill-with-docs → /to-prd → /to-issues: root-caused the 3 hybrid-`gen_run` blockers against code (probe/fetch asymmetry, niche infra/off_niche conflation, misfit legacy policy gate); locked 6 decisions; refined ADR-0003 (degrade decision on a fetched+validated asset); published PRD `first-live-hybrid-gen-run` + Issues 35–38. No code written.
 
 ## Artifacts
 
@@ -74,6 +78,9 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 | Finish-line PRD | `docs/prds/finish-line-autonomous-hybrid.md` | Issues 26–29; `ready-for-agent` |
 | ADR-0004 | `docs/adr/0004-ai-centric-niche-and-ingest-relevance-gate.md` | AI-centric niche + ingest gate + significance/HN |
 | AI-niche PRD | `docs/prds/ai-niche-trending-selection-and-photo-framing.md` | Issues 30–34; `ready-for-agent` |
+| ADR-0003 Refinement | `docs/adr/0003-licensed-only-image-sourcing-for-autonomous-ships.md` | 2026-05-30: degrade decision on fetched+validated asset, not search probe |
+| First-hybrid-gen_run PRD | `docs/prds/first-live-hybrid-gen-run.md` | Issues 35–38; `ready-for-agent` |
+| Grill record (hybrid gen_run) | `CONTEXT/Grilling/2026-05-30-hybrid-gen-run-finish-line.md` | 6 decisions of record |
 
 ## Sessions
 
@@ -83,6 +90,7 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 - Slice 10 refine + Slice 11 cadence (2026-05-24) — `.sessions/2026-05-24__slice-10-refine-slice-11-cadence/handoff.md`
 - Finish-line roadmap (2026-05-26) — `.sessions/2026-05-26__finish-line-roadmap/handoff.md`
 - AI-niche + photo framing (2026-05-27) — `.sessions/2026-05-27__ai-niche-and-photo-framing/handoff.md`
+- First live hybrid gen_run (2026-05-30) — `.sessions/2026-05-30__hybrid-gen-run-finish-line/handoff.md`
 
 ## Open Items
 
@@ -90,3 +98,5 @@ Lock the niche, content format, budget, weekly cadence, and tech stack direction
 - ~~Slice 11 PRD/Issue 14 not implemented~~ — code shipped (`[~]`); live-verify folded into Issue 29.
 - **Finish line (Issues 26–29) not started.** Path to "done": Issue 26 (licensed-only sourcing, AFK) + Issue 20 (live spike, HITL) → Issue 28 (unattended `gen_run` verify) → Issue 29 (first hybrid ship, two-gate). Issue 27 (housekeeping) is independent AFK.
 - **AI-niche refit (Issues 30–34) shipped (2026-05-27).** Live-verify next `gen_run` for on-niche topics + Ken Burns framing. `spike-82` rejected manually; code/docs reconciled.
+- **First live hybrid gen_run (Issues 35–38) planned (2026-05-30), not started.** Path: Issue 35 (resolve fetches-and-caches + cap 250¢, AFK) → Issue 36 (niche infra split, AFK) → Issue 37 (pre-billing narration policy, AFK, blocked by 35) → Issue 38 (live `gen_run` verify + HITL, supersedes Issue 20). No code written yet; `config.yaml` cap still 270.
+- **Deferred (pending evidence):** niche-classifier prompt retune — only if the post-Issue-36 live run still rejects genuinely on-niche items.

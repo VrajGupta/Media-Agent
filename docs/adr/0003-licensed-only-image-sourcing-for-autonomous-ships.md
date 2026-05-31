@@ -76,6 +76,33 @@ there and load-bearing afterward.
    takedowns reactively. Rejected: bets the live channel on every web image being
    claim-free; one strike can demonetize or remove the channel.
 
+## Refinement — 2026-05-30 (degrade decision must run on a fetched asset, not a search probe)
+
+**Context:** Grilling the first live hybrid `gen_run`
+(`.sessions/2026-05-30__hybrid-gen-run-finish-line/handoff.md`). The as-built
+resolver decided degrade-vs-keep with a *search-only probe*
+(`probe_licensed_image`: true if a source returns **any candidate**, no download, no
+validation) while the render step used a *different* function (`fetch_image`: download
++ resolution/content-type validation, raising `NoImageFoundError` on failure). The two
+answer different questions, so a probe "hit" could keep a shot as **Real-image**, let
+Kling bill the **AI-video shots**, and then abort at render when the candidate failed
+to download/validate — wasting ~$2 of already-billed spend. This violated the "price
+the degrade correctly *before* billing" mitigation above.
+
+**Decision:** The "before billing" guarantee requires that the resolve step perform the
+**same operation** the render step relies on. The licensed-source resolver
+**fetches, validates, and caches** each **Real-image shot**'s still up front; a
+**hit** means a validated, downloadable asset now sits in the cache, and a **miss**
+degrades to **AI-video** — all *before* any Kling job is submitted. The render step
+then reads the cached asset and never performs a second, possibly-divergent fetch.
+Probe and fetch are unified into one cache-populating operation; the search-only probe
+is retired.
+
+**Consequence:** A **Licensed source** "satisfies" an entity only when it yields a
+validated, downloadable still — not merely a search result. The billable AI-video count
+is therefore exact at billing time, and a licensed miss can never cost wasted Kling
+spend.
+
 ## Scope
 
 Applies to the autonomous (auto-published) path only. The manual spike, dev configs,

@@ -12,7 +12,7 @@ import pytest
 from PIL import Image
 
 from src.image_fetch.errors import LivingPersonEntityError, NoImageFoundError
-from src.image_fetch.fetcher import fetch_image, probe_licensed_image
+from src.image_fetch.fetcher import fetch_image, resolve_licensed_image
 from src.image_fetch.validation import validate_image_bytes
 
 
@@ -215,16 +215,42 @@ def test_fetch_image_skips_web_when_disabled(tmp_path):
     assert "web" not in mock_build.call_args[0][0]
 
 
-def test_probe_licensed_image_never_consults_web(tmp_path):
+def test_resolve_licensed_image_never_consults_web(tmp_path):
     cfg = _make_cfg(tmp_path, web_fallback=True)
     cfg.image_fetch.sources = ["logo", "wikimedia", "openverse", "web"]
     cache_dir = tmp_path / "cache"
     session = MagicMock()
     source = MagicMock()
-    source.search.return_value = [MagicMock(url="https://example.com/logo.png")]
+    candidate = MagicMock(
+        url="https://example.com/logo.png",
+        source="logo",
+        license="CC0",
+        source_url="https://example.com",
+    )
+    source.search.return_value = [candidate]
+    session.get.return_value = MagicMock(
+        raise_for_status=lambda: None,
+        headers={"Content-Type": "image/png"},
+        content=_make_png(),
+    )
 
     with patch("src.image_fetch.fetcher.build_sources") as mock_build:
         mock_build.return_value = [source]
-        assert probe_licensed_image("OpenAI logo", None, cfg, cache_dir=cache_dir, session=session)
+        asset = resolve_licensed_image(
+            "OpenAI logo", None, cfg, cache_dir=cache_dir, session=session,
+        )
 
+    assert asset is not None
     assert "web" not in mock_build.call_args[0][0]
+
+
+def test_resolve_licensed_image_returns_none_on_miss(tmp_path):
+    cfg = _make_cfg(tmp_path, web_fallback=False)
+    cache_dir = tmp_path / "cache"
+    session = MagicMock()
+
+    with patch("src.image_fetch.fetcher.build_sources") as mock_build:
+        mock_build.return_value = []
+        assert resolve_licensed_image(
+            "unknown widget", None, cfg, cache_dir=cache_dir, session=session,
+        ) is None

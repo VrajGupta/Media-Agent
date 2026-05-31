@@ -82,3 +82,58 @@ def test_empty_title_is_off_niche_without_http(monkeypatch):
     v = ng_mod.classify_niche("", "summary", model="m")
     assert v.verdict == "off_niche"
     assert calls["n"] == 0
+
+
+def test_infra_failure_keeps_topic_and_emits_alert(tmp_path):
+    from src.topic_ingest.runner import _apply_niche_gate
+
+    cfg = SimpleNamespace(ollama_model="m")
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+
+    def _classify(_title, _summary, *, model):
+        return ng_mod.NicheVerdict(
+            verdict="off_niche",
+            reason="ollama unreachable",
+            infrastructure_failed=True,
+        )
+
+    assert _apply_niche_gate(
+        "Claude Opus 4.7 released",
+        "summary",
+        cfg,
+        logs_dir=logs_dir,
+        _classify=_classify,
+    ) is True
+    alerts = (logs_dir / "alerts.md").read_text(encoding="utf-8")
+    assert "niche_gate_unavailable" in alerts
+
+
+def test_off_niche_still_dropped():
+    from src.topic_ingest.runner import _apply_niche_gate
+
+    cfg = SimpleNamespace(ollama_model="m")
+
+    def _classify(_title, _summary, *, model):
+        return ng_mod.NicheVerdict(
+            verdict="off_niche",
+            reason="culture entertainment",
+            infrastructure_failed=False,
+        )
+
+    assert _apply_niche_gate("OnlyFans TV show", "summary", cfg, _classify=_classify) is False
+
+
+def test_on_niche_still_kept():
+    from src.topic_ingest.runner import _apply_niche_gate
+
+    cfg = SimpleNamespace(ollama_model="m")
+
+    def _classify(_title, _summary, *, model):
+        return ng_mod.NicheVerdict(
+            verdict="on_niche",
+            reason="major AI model launch",
+            infrastructure_failed=False,
+        )
+
+    assert _apply_niche_gate("Claude Opus 4.7 released", "summary", cfg, _classify=_classify) is True

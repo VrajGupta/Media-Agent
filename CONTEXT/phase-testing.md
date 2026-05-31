@@ -1,7 +1,7 @@
 # Phase: testing
 **Project:** Media-Agent (Pivot.6)
 **Status:** in-progress
-**Last updated:** 2026-05-27
+**Last updated:** 2026-05-31
 
 ## Objective
 
@@ -34,6 +34,7 @@ Maintain a comprehensive test suite that covers all pipeline modules. Tests must
 - [2026-05-09] Phase 4.5 — policy_gate (4 checks + pure evaluator) + quality_screen (6 gates) tests.
 - [2026-05-27] Issue 33 — 8 Ken Burns argv/pure-helper tests (`tests/assembler/test_ken_burns.py`).
 - [2026-05-27] Issue 31 — 5 niche-gate unit + 2 ingest integration tests.
+- [2026-05-31] Issues 35–37 — `tests/test_hybrid_gen_run_policy.py`, updated shot_plan/fetcher/gen_run/niche tests (48 targeted green).
 
 ## Artifacts
 
@@ -56,6 +57,7 @@ Maintain a comprehensive test suite that covers all pipeline modules. Tests must
 - Ticket 01–05 TDD sessions (2026-05-18/2026-05-19)
 - Slice 8 + 9 test additions (2026-05-22)
 - [issue-22-shot-normalization-tdd](../.sessions/2026-05-26__issue-22-shot-normalization-tdd/handoff.md) — 2026-05-26
+- [issues-35-37-tdd](../.sessions/2026-05-31__issues-35-37-tdd/handoff.md) — 2026-05-31
 
 ## Open Items
 

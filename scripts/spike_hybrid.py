@@ -1,7 +1,7 @@
 """Throwaway end-to-end hybrid spike (Pivot.7 / P7.6).
 
-One real topic → tagged shots → hybrid routing → Kokoro → assemble → output/pending/.
-Operator validates visuals, voice, and cost manually.
+SUPERSEDED 2026-05-31 — Issue 38: use `python -m src.gen_run --clips 1` instead.
+This script proved less than gen_run and is no longer the proof path.
 """
 
 from __future__ import annotations

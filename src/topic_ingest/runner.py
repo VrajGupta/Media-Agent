@@ -53,12 +53,21 @@ def _apply_niche_gate(
     summary: str | None,
     cfg,
     *,
+    logs_dir=None,
     _classify: Callable[..., NicheVerdict] | None = None,
 ) -> bool:
-    """Return True if the topic should be persisted (on-niche)."""
+    """Return True if the topic should be persisted (on-niche or infra fail-open)."""
     classify = _classify or classify_niche
     model = getattr(cfg, "ollama_model", "qwen2.5:3b-instruct")
     verdict = classify(title, summary, model=model)
+    if verdict.infrastructure_failed:
+        if logs_dir is not None:
+            append_alert(
+                logs_dir,
+                kind="niche_gate_unavailable",
+                message=f"niche gate unavailable — kept topic — {title}: {verdict.reason}",
+            )
+        return True
     if verdict.is_on_niche:
         return True
     logger.debug("niche_gate: off_niche — {} — {}", verdict.reason, title)
@@ -99,6 +108,7 @@ def fetch_unscripted_topics(
     ng = getattr(ti, "niche_gate", None)
     low_yield_threshold = int(getattr(ng, "low_yield_threshold", 1)) if ng else 1
     extended_hours = int(getattr(ng, "recency_hours_extended", 96)) if ng else 96
+    logs_dir = cfg.abs_path(cfg.paths.logs_dir) if niche_enabled else None
 
     seen_rows = repo.seen_topics_in_window(ti.seen_topics_window_days)
     seen_hashes: set[str] = {r["url_hash"] for r in seen_rows}
@@ -164,6 +174,7 @@ def fetch_unscripted_topics(
                     title,
                     summary,
                     cfg,
+                    logs_dir=logs_dir,
                     _classify=_classify_niche,
                 ):
                     continue

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-LicensedProbe = Callable[[str, str | None], bool]
+from src.image_fetch.base import ImageAsset
+
+LicensedResolver = Callable[[str, str | None], ImageAsset | None]
 
 
 def _degrade_real_image_to_ai_video(shot: dict) -> dict:
@@ -23,21 +25,22 @@ def _degrade_real_image_to_ai_video(shot: dict) -> dict:
 def resolve_shot_plan(
     shots: list[dict],
     *,
-    licensed_probe: LicensedProbe,
+    licensed_resolver: LicensedResolver,
 ) -> tuple[list[dict], int]:
     """Return (final shot list, billable ai_video count).
 
     Real-image shots that miss every licensed source degrade to ai_video
-    before any Kling billing. ``licensed_probe`` must consult licensed sources
-    only — never web search.
+    before any Kling billing. ``licensed_resolver`` must fetch+validate over
+    licensed sources only — never web search.
     """
     resolved: list[dict] = []
     for shot in shots:
         if shot.get("kind") == "real_image":
             entity = shot["entity"]
             query = shot.get("search_query")
-            if licensed_probe(entity, query):
-                resolved.append(shot)
+            asset = licensed_resolver(entity, query)
+            if asset is not None:
+                resolved.append({**shot, "image_asset": asset})
             else:
                 resolved.append(_degrade_real_image_to_ai_video(shot))
         else:

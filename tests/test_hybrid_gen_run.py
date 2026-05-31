@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.policy_gate.evaluator import PolicyVerdict
 from src.assembler.build import build_assembler_argv, write_concat_list
 from src.gen_run import count_ai_video_shots, _generate_clip
 
@@ -80,7 +81,7 @@ def test_generate_clip_routes_only_ai_video_to_kling(tmp_path):
     def _fake_gen(shots, *args, **kwargs):
         return [fake_shot] * len(shots)
 
-    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+    with patch("src.gen_run.resolve_licensed_image", return_value=MagicMock(path=str(tmp_path / "img.jpg"), source="logo", license="CC0", source_url="https://x", width=1080, height=1920)), \
          patch("src.gen_run.generate_shots", side_effect=_fake_gen) as p_gen, \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot) as p_kb, \
          patch("src.gen_run.synthesize"), \
@@ -116,7 +117,8 @@ def test_image_fetch_failure_skips_clip_without_crashing_batch(tmp_path):
          patch("src.gen_run.run_stage_a", return_value=[]), \
          patch("src.gen_run.run_stage_b", return_value=[]), \
          patch("src.gen_run.run_stage_c", return_value=scripts), \
-         patch("src.policy_gate.run_all", return_value=[]), \
+         patch("src.gen_run.evaluate_clip_policy", return_value=PolicyVerdict(passed=True)), \
+         patch("src.gen_run.resolve_licensed_image", return_value=MagicMock(path=str(tmp_path / "img.jpg"), source="logo", license="CC0", source_url="https://x", width=1080, height=1920)), \
          patch("src.quality_screen.run_all", return_value=[]), \
          patch("src.slot_planner.run_all", return_value=[]), \
          patch("src.retention.run_all", return_value=MagicMock()), \
@@ -148,7 +150,7 @@ def test_generate_clip_logs_stderr_on_assembly_failure(tmp_path):
     def _fake_gen(shots, *args, **kwargs):
         return [fake_shot] * len(shots)
 
-    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+    with patch("src.gen_run.resolve_licensed_image", return_value=MagicMock(path=str(tmp_path / "img.jpg"), source="logo", license="CC0", source_url="https://x", width=1080, height=1920)), \
          patch("src.gen_run.generate_shots", side_effect=_fake_gen), \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
          patch("src.gen_run.synthesize"), \
@@ -193,7 +195,7 @@ def test_generate_clip_retries_libx264_on_encoder_failure(tmp_path):
     def _fake_gen(shots, *args, **kwargs):
         return [fake_shot] * len(shots)
 
-    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+    with patch("src.gen_run.resolve_licensed_image", return_value=MagicMock(path=str(tmp_path / "img.jpg"), source="logo", license="CC0", source_url="https://x", width=1080, height=1920)), \
          patch("src.gen_run.generate_shots", side_effect=_fake_gen), \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
          patch("src.gen_run.synthesize"), \
@@ -229,7 +231,7 @@ def test_generate_clip_does_not_retry_on_filtergraph_failure(tmp_path):
     def _fake_gen(shots, *args, **kwargs):
         return [fake_shot] * len(shots)
 
-    with patch("src.gen_run.probe_licensed_image", return_value=True), \
+    with patch("src.gen_run.resolve_licensed_image", return_value=MagicMock(path=str(tmp_path / "img.jpg"), source="logo", license="CC0", source_url="https://x", width=1080, height=1920)), \
          patch("src.gen_run.generate_shots", side_effect=_fake_gen), \
          patch("src.gen_run._render_real_image_shot", return_value=real_shot), \
          patch("src.gen_run.synthesize"), \

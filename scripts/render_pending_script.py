@@ -18,7 +18,7 @@ from src.gen_run import _generate_clip, _persist_rendered_clip, _script_dict_fro
 from src.observability.logging_setup import setup_logging
 from src.scripter.shots import normalize_shots
 from src.scripter.shot_plan import resolve_shot_plan
-from src.image_fetch.fetcher import probe_licensed_image
+from src.image_fetch.fetcher import resolve_licensed_image
 from src.state import Repository, connect
 
 SCRIPT_ID = "05bed0bd-2026-4442-aedb-59dff837a184"
@@ -39,7 +39,7 @@ def main() -> int:
     normalized = normalize_shots(script["shots"])
     resolved, billable = resolve_shot_plan(
         normalized,
-        licensed_probe=lambda entity, query: probe_licensed_image(entity, query, cfg),
+        licensed_resolver=lambda entity, query: resolve_licensed_image(entity, query, cfg),
     )
     print(f"Rendering {script['title']!r} — {billable} billable ai_video shots")
     out = _generate_clip(

@@ -4,7 +4,7 @@
 
 # CONTEXT Index — Media-Agent (Pivot.6)
 
-Tech/AI news YouTube Shorts pipeline. Slices 1–9 complete. **Slice 10 uploaded** (`9lpL8kuLX08`); T+1h Studio checks + T+48h stability gate pending. Slice 11 Tue/Thu cadence code shipped (Issue 14).
+Tech/AI news YouTube Shorts pipeline. Slices 1–9 complete. **Slice 10 uploaded** (`9lpL8kuLX08`); T+1h Studio checks + T+48h stability gate pending. Slice 11 Tue/Thu cadence code shipped (Issue 14). **Issues 35–37 shipped (2026-05-31):** licensed fetch-and-cache resolver, niche infra fail-open, pre-billing policy. **Issue 38 HITL pending:** operator live `gen_run --clips 1`.
 
 ## Domain terminology (sharpened)
 
@@ -17,10 +17,10 @@ Tech/AI news YouTube Shorts pipeline. Slices 1–9 complete. **Slice 10 uploaded
 
 | Phase | File | Status | Last Updated | Summary |
 |---|---|---|---|---|
-| planning | [phase-planning.md](phase-planning.md) | in-progress | 2026-05-27 | Niche locked (Tech/AI), 10-slice plan, two-gate sign-off; finish-line roadmap (Issues 26–29); **AI-niche refit** (ADR-0004 AI-centric niche + ingest gate + significance/HN, Issues 30–34) |
+| planning | [phase-planning.md](phase-planning.md) | in-progress | 2026-05-30 | Niche locked (Tech/AI), 10-slice plan, two-gate sign-off; finish-line roadmap (Issues 26–29); AI-niche refit (ADR-0004, Issues 30–34); **first live hybrid gen_run** (3 defect fixes + ADR-0003 refinement, Issues 35–38) |
 | architecture | [phase-architecture.md](phase-architecture.md) | in-progress | 2026-05-27 | SQLite schema (4 Pivot.6 tables), Pydantic Config, 50+ DAL helpers, Provider ABC; **ADR-0002** assembler shot normalization; **ADR-0003** licensed-only image sourcing; **ADR-0004** AI-centric niche + ingest relevance gate |
-| development | [phase-development.md](phase-development.md) | in-progress | 2026-05-28 | ADR-0004 shipped; sample clip uploaded `qRdVYO1Tmfw`; hybrid gen_run still blocked |
-| testing | [phase-testing.md](phase-testing.md) | in-progress | 2026-05-27 | Issue 22 lavfi tests + **Issue 31/33 niche/Ken Burns tests**; 36 assembler green |
+| development | [phase-development.md](phase-development.md) | in-progress | 2026-05-31 | Issues 35–37 shipped; hybrid gen_run dry-run OK; live clip HITL pending (Issue 38) |
+| testing | [phase-testing.md](phase-testing.md) | in-progress | 2026-05-31 | Issue 35/36/37 TDD tests; licensed resolver + policy-skip + niche infra split |
 | deployment | [phase-deployment.md](phase-deployment.md) | in-progress | 2026-05-28 | Slice 10 + post-refit sample upload live; Studio spot-check pending 2026-06-02 |
 | review | [phase-review.md](phase-review.md) | complete | 2026-05-24 | 4-check policy gate, 6-gate quality screen, AI disclosure compliance (Slice 9), pre-flight checklist |
 

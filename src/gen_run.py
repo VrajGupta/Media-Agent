@@ -1,8 +1,8 @@
 """Pivot.6 weekly generation orchestrator.
 
 Replaces weekly_run.py for the AI-generated pipeline:
-  topic_ingest → scripter A/B/C → policy_gate
-  → per-script: ai_gen + narration + assemble
+  topic_ingest → scripter A/B/C
+  → per-script: pre-billing policy + licensed resolve + ai_gen + narration + assemble
   → quality_screen → slot_planner → retention
 
 Usage:
@@ -39,7 +39,7 @@ from src.scripter.ollama_fns import (
     make_topic_tagger,
 )
 
-from src import policy_gate, quality_screen, slot_planner, retention
+from src import quality_screen, slot_planner, retention
 
 # Per-clip stage imports at module level so tests can patch src.gen_run.*
 from src.ai_gen.openrouter_kling import OpenRouterKlingClient
@@ -49,10 +49,11 @@ from src.assembler.ken_burns import build_ken_burns_argv
 from src.editor.ffmpeg_runner import run_ffmpeg
 from src.editor.music import SUPPORTED_EXTENSIONS
 from src.editor.slug import title_slug
-from src.image_fetch.fetcher import fetch_image, probe_licensed_image
+from src.image_fetch.fetcher import fetch_image, resolve_licensed_image
 from src.image_fetch.errors import ImageFetchError
 from src.narration.aligner import align
 from src.narration.synth import synthesize
+from src.policy_gate.evaluator import evaluate_clip_policy
 from src.scripter.shots import normalize_shots
 from src.scripter.shot_plan import resolve_shot_plan
 from src.subtitles.line_ass import write_line_ass_file
@@ -205,13 +206,18 @@ def _render_real_image_shot(
     shots_dir: Path,
     cfg,
 ) -> Path:
-    entity = shot["entity"]
-    query = shot.get("search_query")
-    asset = fetch_image(entity, query, cfg)
+    cached = shot.get("image_asset")
+    if cached is not None:
+        image_path = Path(cached.path)
+    else:
+        entity = shot["entity"]
+        query = shot.get("search_query")
+        asset = fetch_image(entity, query, cfg)
+        image_path = Path(asset.path)
     dest = shots_dir / f"shot_{index:02d}.mp4"
     tmp = dest.with_suffix(".tmp.mp4")
     argv = build_ken_burns_argv(
-        Path(asset.path),
+        image_path,
         tmp,
         duration_s=float(shot.get("duration_s", 4)),
         resolution=tuple(cfg.output_resolution),
@@ -239,6 +245,7 @@ def _generate_clip(
     *,
     openrouter_api_key: str | None,
     dry_run: bool,
+    resolved_shots: list[dict] | None = None,
 ) -> Path | None:
     """Run hybrid shot routing → narration → assemble for one script."""
     clip_id = script.get("script_id", str(uuid.uuid4())[:8])
@@ -250,11 +257,17 @@ def _generate_clip(
     narr_cfg = cfg.narration
     asm_cfg = cfg.assembler
     style_suffix = ai_cfg.style_suffix if ai_cfg.style_suffix else ""
-    normalized = normalize_shots(shots_raw)
-    resolved, billable_ai = resolve_shot_plan(
-        normalized,
-        licensed_probe=lambda entity, query: probe_licensed_image(entity, query, cfg),
-    )
+    if resolved_shots is not None:
+        resolved = resolved_shots
+        billable_ai = sum(1 for s in resolved if s.get("kind") == "ai_video")
+    else:
+        normalized = normalize_shots(shots_raw)
+        resolved, billable_ai = resolve_shot_plan(
+            normalized,
+            licensed_resolver=lambda entity, query: resolve_licensed_image(
+                entity, query, cfg,
+            ),
+        )
 
     if billable_ai * 67 > ai_cfg.per_clip_cost_cents_max and billable_ai > 0:
         raise RuntimeError(
@@ -465,22 +478,48 @@ def run_generation(
                     len(selected),
                 )
 
-        # --- Per-script: policy gate, then generate clip ---
-        logger.info("gen_run: stage=policy_gate")
-        gate_results = policy_gate.run_all(repo, cfg, dry_run=dry_run)
-        summary["stages"]["policy_gate"] = _summarize(gate_results)
-
+        # --- Per-script: pre-billing policy, resolve shot plan, generate clip ---
+        ai_cfg = cfg.ai_gen
         clips_generated = 0
         for script in selected:
             try:
+                verdict = evaluate_clip_policy(
+                    cfg,
+                    script.get("narration", ""),
+                    script.get("title", ""),
+                )
+                if verdict.infrastructure_failed:
+                    logger.warning(
+                        "gen_run: policy infra failed for {}: {}",
+                        script.get("script_id"),
+                        verdict.infrastructure_reason,
+                    )
+                    continue
+                if not verdict.passed:
+                    logger.info(
+                        "gen_run: policy rejected {} — {}",
+                        script.get("script_id"),
+                        verdict.reason_string,
+                    )
+                    continue
+
                 shots_raw = script.get("shots", [])
                 normalized = normalize_shots(shots_raw)
-                resolved, _ = resolve_shot_plan(
+                resolved, billable_ai = resolve_shot_plan(
                     normalized,
-                    licensed_probe=lambda entity, query: probe_licensed_image(
+                    licensed_resolver=lambda entity, query: resolve_licensed_image(
                         entity, query, cfg,
                     ),
                 )
+                if billable_ai * 67 > ai_cfg.per_clip_cost_cents_max and billable_ai > 0:
+                    logger.error(
+                        "gen_run: clip {} projected OpenRouter cost {}c exceeds cap {}",
+                        script.get("script_id"),
+                        billable_ai * 67,
+                        ai_cfg.per_clip_cost_cents_max,
+                    )
+                    continue
+
                 durations = [float(s.get("duration_s", 4)) for s in resolved]
                 asm_cfg = cfg.assembler
                 if asm_cfg.crossfade_enabled and len(resolved) > 1:
@@ -494,6 +533,7 @@ def run_generation(
                     script, cfg, repo,
                     openrouter_api_key=openrouter_api_key,
                     dry_run=dry_run,
+                    resolved_shots=resolved,
                 )
                 if out and not dry_run:
                     _persist_rendered_clip(
