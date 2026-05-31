@@ -6,7 +6,8 @@ where the work is at a glance.
 
 | Date | Session folder | Summary | Next action |
 |---|---|---|---|
-| 2026-05-31 | [issues-35-37-tdd](2026-05-31__issues-35-37-tdd/handoff.md) | TDD Issues 35–37 shipped (licensed resolver, niche infra split, pre-billing policy); Issue 38 dry-run OK | Operator: live `gen_run --clips 1` + HITL (Issue 38) |
+| 2026-05-31 | [hybrid-live-upload-issue-38](2026-05-31__hybrid-live-upload-issue-38/handoff.md) | First hybrid live gen_run + upload `NPFJiqmd4ro`; pitch fix; 252¢ Kling | 2026-06-02 T+1h Studio gate on `NPFJiqmd4ro` (Issue 29) |
+| 2026-05-31 | [issues-35-37-tdd](2026-05-31__issues-35-37-tdd/handoff.md) | TDD Issues 35–37 shipped | *(superseded by hybrid-live-upload)* |
 | 2026-05-30 | [hybrid-gen-run-finish-line](2026-05-30__hybrid-gen-run-finish-line/handoff.md) | Grill→PRD→Issues for first live hybrid `gen_run`; root-caused 3 defects, refined ADR-0003, published PRD + Issues 35–38 (no code) | *(superseded by 35–37 TDD)* |
 | 2026-05-28 | [sample-clip-upload](2026-05-28__sample-clip-upload/handoff.md) | Sample clip approved + uploaded `qRdVYO1Tmfw` (publish 2026-06-02 09:00 SGT) | Studio spot-check on publish day; then hybrid `gen_run --clips 1` |
 | 2026-05-28 | [adr-0004-live-clip-review](2026-05-28__adr-0004-live-clip-review/handoff.md) | Live gen_run blocked on cost cap; sample MP4 rendered for HITL | *(superseded by sample-clip-upload)* |

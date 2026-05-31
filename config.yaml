@@ -120,7 +120,7 @@ narration:
   kokoro_voice: am_michael
   voice: en-US-GuyNeural
   rate: "+10%"
-  pitch: "0Hz"
+  pitch: "+0Hz"
 
 assembler:
   crossfade_enabled: true

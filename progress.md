@@ -1026,8 +1026,10 @@ Fix steps: (1) confirm CUDA 12.x toolkit installed; (2) add `CUDA\v12.x\bin` to 
 - [x] Per-script `evaluate_clip_policy(narration, title)` before ai_gen billing; infra fail-soft skip; uploader re-check unchanged.
 - [x] Tests: `tests/test_hybrid_gen_run_policy.py`, updated `tests/test_gen_run.py`.
 
-#### Issue 38 — Live hybrid gen_run verification · HITL pending
-- [x] Dry-run rehearsal: `gen_run --dry-run --clips 1` exit 0 (2026-05-31; zero DB writes, zero OpenRouter spend).
-- [x] `scripts/spike_hybrid.py` marked superseded (use `python -m src.gen_run --clips 1`).
-- [ ] **Operator:** live `gen_run --clips 1` → Hybrid MP4 in `output/pending/` at 1080×1920; ffprobe + cost + provenance + Tue/Thu slot; HITL eyeball sign-off.
-- [ ] Evidence row in this section after live run (ffprobe dims, `quota_usage`, `runs.md`, provenance).
+#### Issue 38 — Live hybrid gen_run verification · complete (HITL + upload)
+- [x] Dry-run rehearsal: `gen_run --dry-run --clips 1` exit 0 (2026-05-31).
+- [x] Live hybrid clip: `1ec5cbc1` — 1080×1920@30, 16.2 s, 2× licensed Ken Burns + 2× Kling; **252¢** OpenRouter (126¢ wasted on pitch bug + 126¢ retry).
+- [x] Pitch fix: `config.yaml` `narration.pitch` `0Hz` → `+0Hz` (Edge TTS fallback after Kokoro miss).
+- [x] Slotted **Tue 2026-06-02 09:00 SGT** → `output/pending/2026-06-02__slot_0900__genetic_leap_reverse_aging_51fa.mp4`.
+- [x] Operator HITL: clip approved; uploaded YouTube **`NPFJiqmd4ro`** (`publishAt=2026-06-02T01:00:00Z`, `containsSyntheticMedia`, copy in `output/approved/`).
+- [ ] Issue 29 ship gates: T+1h Studio spot-check + T+48h stability on `NPFJiqmd4ro`.
